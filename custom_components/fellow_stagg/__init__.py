@@ -16,18 +16,20 @@ from homeassistant.helpers.update_coordinator import (
 )
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import DOMAIN, CONF_POLLING_INTERVAL, DEFAULT_POLLING_INTERVAL
+from .const import (
+    CONF_POLLING_INTERVAL,
+    DEFAULT_POLLING_INTERVAL,
+    DOMAIN,
+    MAX_TEMP_C,
+    MAX_TEMP_F,
+    MIN_TEMP_C,
+    MIN_TEMP_F,
+)
 from .kettle_ble import KettleBLEClient
 
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SWITCH, Platform.NUMBER, Platform.WATER_HEATER]
-
-# Temperature ranges for the kettle
-MIN_TEMP_F = 104
-MAX_TEMP_F = 212
-MIN_TEMP_C = 40
-MAX_TEMP_C = 100
 
 
 class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator):
