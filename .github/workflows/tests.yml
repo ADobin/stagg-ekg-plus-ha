@@ -19,7 +19,7 @@ jobs:
             phacc: ""
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           python-version: "3.14"
       - run: uv venv .venv && uv pip install --python .venv/bin/python -r requirements-test.txt
