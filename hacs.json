@@ -1,7 +1,6 @@
 {
   "name": "Stagg EKG+",
   "content_in_root": false,
-  "render_readme": true,
-  "homeassistant": "2024.8.0",
-  "hacs": "1.6.0"
+  "homeassistant": "2026.3.0",
+  "hacs": "2.0.0"
 }

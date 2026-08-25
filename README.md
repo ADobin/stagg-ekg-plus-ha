@@ -50,11 +50,15 @@ Once configured, the kettle appears as one device with these entities:
 | `switch.*_power` | Kettle power |
 | `number.*_target_temperature` | Target temperature in the kettle's unit |
 | `sensor.*_current_temperature`, `sensor.*_target_temperature` | Temperatures reported by the kettle |
-| `sensor.*_power`, `sensor.*_hold_mode`, `sensor.*_kettle_position`, `sensor.*_countdown` | Kettle status |
+| `sensor.*_power`, `sensor.*_hold_mode`, `sensor.*_kettle_position` | Kettle status; hold mode reports keep-warm actually engaged |
+| `sensor.*_countdown` | Auto-off countdown in seconds (3600 with hold, 300 without) |
 | `number.*_polling_interval` | Seconds between polls, 5–60 (diagnostic, disabled by default) |
 | `select.*_fallback_temperature_unit` | Unit assumed before the kettle reports one (config, disabled by default) |
 
 ### Temperature units
+
+The current temperature is `unknown` while the kettle is off or lifted (the kettle
+reports a placeholder rather than a reading).
 
 The kettle reports whether it is set to °F or °C and the integration follows it:
 the target temperature entities switch their unit and range (104–212 °F or 40–100 °C)
@@ -82,7 +86,7 @@ to an idle kettle. After a Home Assistant restart the kettle must advertise once
 
 ## Requirements
 
-- Home Assistant 2024.8.0 or newer
+- Home Assistant 2026.3.0 or newer
 - Home Assistant Community Store (HACS) for easy installation
 - Bluetooth support in your Home Assistant instance
 - A Fellow Stagg EKG+ kettle

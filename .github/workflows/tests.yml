@@ -1,0 +1,30 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: ruff + pytest (HA ${{ matrix.ha }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # pytest-homeassistant-custom-component pins one HA release each
+          - ha: "2026.3.1 (minimum)"
+            phacc: "0.13.317"
+          - ha: "2026.8.3"
+            phacc: ""
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.14"
+      - run: uv venv .venv && uv pip install --python .venv/bin/python -r requirements-test.txt
+      - if: matrix.phacc != ''
+        # Older HA's usb component still imports pyserial
+        run: uv pip install --python .venv/bin/python "pytest-homeassistant-custom-component==${{ matrix.phacc }}" pyserial
+      - run: .venv/bin/ruff check custom_components tests
+      - run: .venv/bin/python -m pytest -q
