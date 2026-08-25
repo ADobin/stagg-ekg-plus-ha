@@ -1,24 +1,21 @@
 """Number platform for Fellow Stagg EKG+ kettle."""
 from __future__ import annotations
 
-import asyncio
-import logging
 from datetime import timedelta
-from typing import Any
+import logging
 
 from homeassistant.components.number import (
   NumberEntity,
   NumberMode,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import EntityCategory
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import FellowStaggDataUpdateCoordinator
-from .const import DOMAIN, CONF_POLLING_INTERVAL, DEFAULT_POLLING_INTERVAL, MIN_POLLING_INTERVAL, MAX_POLLING_INTERVAL
+from .const import CONF_POLLING_INTERVAL, DEFAULT_POLLING_INTERVAL, DOMAIN, MAX_POLLING_INTERVAL, MIN_POLLING_INTERVAL
+from .entity import FellowStaggEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,66 +28,46 @@ async def async_setup_entry(
   coordinator: FellowStaggDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
   async_add_entities([FellowStaggTargetTemperature(coordinator), FellowStaggPollingInterval(coordinator)])
 
-class FellowStaggTargetTemperature(NumberEntity):
-  """Number class for Fellow Stagg kettle target temperature control."""
+class FellowStaggTargetTemperature(FellowStaggEntity, NumberEntity):
+  """Target temperature in the kettle's unit; unit and range follow the kettle."""
 
-  _attr_has_entity_name = True
   _attr_name = "Target Temperature"
   _attr_mode = NumberMode.BOX
   _attr_native_step = 1.0
 
   def __init__(self, coordinator: FellowStaggDataUpdateCoordinator) -> None:
     """Initialize the number."""
-    super().__init__()
-    self.coordinator = coordinator
-    self._attr_unique_id = f"{coordinator._address}_target_temp"
-    self._attr_device_info = coordinator.device_info
-    
-    _LOGGER.debug("Initializing target temp with units: %s", coordinator.temperature_unit)
-    
-    self._attr_native_min_value = coordinator.min_temp
-    self._attr_native_max_value = coordinator.max_temp
-    self._attr_native_unit_of_measurement = coordinator.temperature_unit
-    
-    _LOGGER.debug(
-      "Target temp range set to: %s°%s - %s°%s",
-      self._attr_native_min_value,
-      self._attr_native_unit_of_measurement,
-      self._attr_native_max_value,
-      self._attr_native_unit_of_measurement,
-    )
+    super().__init__(coordinator, "target_temp")
+
+  @property
+  def native_unit_of_measurement(self) -> str:
+    """Return the kettle's temperature unit."""
+    return self.coordinator.temperature_unit
+
+  @property
+  def native_min_value(self) -> float:
+    """Return the minimum target temperature for the unit."""
+    return self.coordinator.min_temp
+
+  @property
+  def native_max_value(self) -> float:
+    """Return the maximum target temperature for the unit."""
+    return self.coordinator.max_temp
 
   @property
   def native_value(self) -> float | None:
     """Return the current target temperature."""
-    value = self.coordinator.data.get("target_temp")
-    _LOGGER.debug("Target temperature read as: %s°%s", value, self.coordinator.temperature_unit)
-    return value
+    return self.data.get("target_temp")
 
   async def async_set_native_value(self, value: float) -> None:
     """Set new target temperature."""
-    _LOGGER.debug(
-      "Setting target temperature to %s°%s",
-      value,
-      self.coordinator.temperature_unit
-    )
-    
-    await self.coordinator.kettle.async_set_temperature(
-      self.coordinator.ble_device,
-      int(value),
-      fahrenheit=self.coordinator.temperature_unit == UnitOfTemperature.FAHRENHEIT
-    )
-    _LOGGER.debug("Target temperature command sent, waiting before refresh")
-    # Give the kettle a moment to update its internal state
-    await asyncio.sleep(0.5)
-    _LOGGER.debug("Requesting refresh after temperature change")
-    await self.coordinator.async_request_refresh()
+    _LOGGER.debug("Setting target temperature to %s°%s", value, self.coordinator.temperature_unit)
+    await self.coordinator.async_set_temperature(value)
 
 
-class FellowStaggPollingInterval(CoordinatorEntity, NumberEntity):
+class FellowStaggPollingInterval(FellowStaggEntity, NumberEntity):
   """Number entity to configure the polling interval."""
 
-  _attr_has_entity_name = True
   _attr_name = "Polling Interval"
   _attr_mode = NumberMode.BOX
   _attr_native_step = 1
@@ -103,9 +80,7 @@ class FellowStaggPollingInterval(CoordinatorEntity, NumberEntity):
 
   def __init__(self, coordinator: FellowStaggDataUpdateCoordinator) -> None:
     """Initialize the polling interval entity."""
-    super().__init__(coordinator)
-    self._attr_unique_id = f"{coordinator._address}_polling_interval"
-    self._attr_device_info = coordinator.device_info
+    super().__init__(coordinator, "polling_interval")
 
   @property
   def native_value(self) -> int:

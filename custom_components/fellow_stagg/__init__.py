@@ -1,53 +1,68 @@
 """Support for Fellow Stagg EKG+ kettles."""
-import logging
+import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
+import logging
 from typing import Any
 
 from homeassistant.components.bluetooth import (
-    async_ble_device_from_address,
-    async_last_service_info,
-    async_scanner_by_source,
+  async_ble_device_from_address,
+  async_last_service_info,
+  async_scanner_by_source,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform, UnitOfTemperature
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.update_coordinator import (
-    DataUpdateCoordinator,
-)
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.update_coordinator import (
+  DataUpdateCoordinator,
+  UpdateFailed,
+)
 
 from .const import (
-    CONF_POLLING_INTERVAL,
-    DEFAULT_POLLING_INTERVAL,
-    DOMAIN,
-    MAX_TEMP_C,
-    MAX_TEMP_F,
-    MIN_TEMP_C,
-    MIN_TEMP_F,
+  COMMAND_SETTLE_DELAY,
+  CONF_POLLING_INTERVAL,
+  DEFAULT_POLLING_INTERVAL,
+  DOMAIN,
+  MAX_FAILED_POLLS,
+  MAX_TEMP_C,
+  MAX_TEMP_F,
+  MIN_TEMP_C,
+  MIN_TEMP_F,
 )
-from .kettle_ble import KettleBLEClient
+from .kettle_ble import KettleBLEClient, KettleError
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SWITCH, Platform.NUMBER, Platform.WATER_HEATER]
+PLATFORMS: list[Platform] = [
+  Platform.SENSOR,
+  Platform.SWITCH,
+  Platform.NUMBER,
+  Platform.WATER_HEATER,
+]
+
+# Keys reported in the kettle's current unit; dropped when the unit changes
+TEMPERATURE_KEYS = ("target_temp", "current_temp")
 
 
-class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator):
+class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
   """Class to manage fetching Fellow Stagg data."""
 
-  def __init__(self, hass: HomeAssistant, address: str, entry_id: str, polling_interval: timedelta) -> None:
+  def __init__(self, hass: HomeAssistant, entry: ConfigEntry, address: str, polling_interval: timedelta) -> None:
     """Initialize the coordinator."""
     super().__init__(
       hass,
       _LOGGER,
+      config_entry=entry,
       name=f"Fellow Stagg {address}",
       update_interval=polling_interval,
     )
     self.kettle = KettleBLEClient(address)
-    self.ble_device = None
     self._address = address
-    self.entry_id = entry_id
+    self.entry_id = entry.entry_id
     self._last_service_info = None  # cached for idle-kettle directed connect
+    self._failed_polls = 0
 
     self.device_info = DeviceInfo(
       identifiers={(DOMAIN, address)},
@@ -57,9 +72,19 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator):
     )
 
   @property
+  def fallback_temperature_unit(self) -> str:
+    """Unit to assume until the kettle reports one: Home Assistant's unit system."""
+    return self.hass.config.units.temperature_unit
+
+  @property
   def temperature_unit(self) -> str:
-    """Get the current temperature unit."""
-    return UnitOfTemperature.FAHRENHEIT if self.data and self.data.get("units") == "F" else UnitOfTemperature.CELSIUS
+    """Unit reported by the kettle, or the fallback while unknown."""
+    units = (self.data or {}).get("units")
+    if units == "F":
+      return UnitOfTemperature.FAHRENHEIT
+    if units == "C":
+      return UnitOfTemperature.CELSIUS
+    return self.fallback_temperature_unit
 
   @property
   def min_temp(self) -> float:
@@ -109,58 +134,58 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator):
       return self._last_service_info.device
     return None
 
-  async def _async_update_data(self) -> dict[str, Any] | None:
-    """Fetch data from the kettle."""
+  async def _async_update_data(self) -> dict[str, Any]:
+    """Poll the kettle and merge the result into the last known state."""
     _LOGGER.debug("Starting poll for Fellow Stagg kettle %s", self._address)
-
-    self.ble_device = async_ble_device_from_address(self.hass, self._address, True)
-    if not self.ble_device:
-      if self._last_service_info is not None:
-        _LOGGER.debug(
-          "No advertisement in cache; injecting cached service info for directed connect to %s",
-          self._address,
-        )
-        self._inject_cached_ble_device()
-        self.ble_device = self._last_service_info.device
-      else:
-        _LOGGER.debug(
-          "No advertisement and no cached service info for %s; skipping poll",
-          self._address,
-        )
-        return None
-
     try:
-      _LOGGER.debug("Attempting to poll kettle data...")
-      data = await self.kettle.async_poll(self.ble_device)
-      _LOGGER.debug(
-        "Successfully polled data from kettle %s: %s",
-        self._address,
-        data,
-      )
+      state = await self.kettle.async_poll(self.get_ble_device_for_connect())
+    except KettleError as err:
+      self._failed_polls += 1
+      if self.data is not None and self._failed_polls < MAX_FAILED_POLLS:
+        _LOGGER.debug(
+          "Poll %d/%d failed for %s, keeping last state: %s",
+          self._failed_polls, MAX_FAILED_POLLS, self._address, err,
+        )
+        return self.data
+      raise UpdateFailed(f"Error polling Fellow Stagg kettle {self._address}: {err}") from err
 
-      # Update cache after a successful poll
-      fresh_info = async_last_service_info(self.hass, self._address, True)
-      if fresh_info is not None:
-        self._last_service_info = fresh_info
+    self._failed_polls = 0
+    fresh_info = async_last_service_info(self.hass, self._address, True)
+    if fresh_info is not None:
+      self._last_service_info = fresh_info
 
-      # Log any changes in data compared to previous state
-      if self.data is not None:
-        changes = {
-          k: (self.data.get(k), v)
-          for k, v in data.items()
-          if k in self.data and self.data.get(k) != v
-        }
-        if changes:
-          _LOGGER.debug("Data changes detected: %s", changes)
+    data = self._merge_state(state)
+    _LOGGER.debug("Polled kettle %s: %s -> %s", self._address, state, data)
+    return data
 
-      return data
-    except Exception as e:
-      _LOGGER.error(
-        "Error polling Fellow Stagg kettle %s: %s",
-        self._address,
-        str(e),
-      )
-      return None
+  def _merge_state(self, state: dict[str, Any]) -> dict[str, Any]:
+    """Overlay a possibly partial poll on the last known state."""
+    previous = dict(self.data or {})
+    if "units" in state and state["units"] != previous.get("units"):
+      for key in TEMPERATURE_KEYS:
+        previous.pop(key, None)
+    return {**previous, **state}
+
+  async def _async_command(self, command: Callable[..., Awaitable[None]], *args: Any, **kwargs: Any) -> None:
+    """Send a command then refresh so entities reflect the kettle's response."""
+    try:
+      await command(self.get_ble_device_for_connect(), *args, **kwargs)
+    except KettleError as err:
+      raise HomeAssistantError(f"Fellow Stagg kettle {self._address}: {err}") from err
+    await asyncio.sleep(COMMAND_SETTLE_DELAY)
+    await self.async_request_refresh()
+
+  async def async_set_power(self, power_on: bool) -> None:
+    """Turn the kettle on or off."""
+    await self._async_command(self.kettle.async_set_power, power_on)
+
+  async def async_set_temperature(self, temperature: float) -> None:
+    """Set the target temperature in the current unit."""
+    await self._async_command(
+      self.kettle.async_set_temperature,
+      int(temperature),
+      fahrenheit=self.temperature_unit == UnitOfTemperature.FAHRENHEIT,
+    )
 
 
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
@@ -177,9 +202,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
   _LOGGER.debug("Setting up Fellow Stagg integration for device: %s", address)
   interval_seconds = entry.options.get(CONF_POLLING_INTERVAL, DEFAULT_POLLING_INTERVAL)
-  coordinator = FellowStaggDataUpdateCoordinator(hass, address, entry.entry_id, timedelta(seconds=interval_seconds))
+  coordinator = FellowStaggDataUpdateCoordinator(hass, entry, address, timedelta(seconds=interval_seconds))
 
-  # Do first update
+  # Raises ConfigEntryNotReady (HA retries setup) if the kettle can't be reached
   await coordinator.async_config_entry_first_refresh()
 
   hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
@@ -194,7 +219,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
   """Unload a config entry."""
   _LOGGER.debug("Unloading Fellow Stagg integration for entry: %s", entry.entry_id)
   if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-    hass.data[DOMAIN].pop(entry.entry_id)
+    coordinator: FellowStaggDataUpdateCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
+    await coordinator.kettle.disconnect()
   return unload_ok
 
 

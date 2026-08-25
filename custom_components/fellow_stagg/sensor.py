@@ -1,6 +1,6 @@
 """Support for Fellow Stagg EKG+ kettle sensors."""
-from dataclasses import dataclass
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from homeassistant import config_entries
 from homeassistant.components.sensor import (
@@ -8,73 +8,67 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorEntityDescription,
 )
-from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import FellowStaggDataUpdateCoordinator
 from .const import DOMAIN
+from .entity import FellowStaggEntity
 
 
-@dataclass
-class FellowStaggSensorEntityDescription(SensorEntityDescription):
-    """Description of a Fellow Stagg sensor."""
+def _label(data: dict[str, Any], key: str, on: str, off: str) -> str | None:
+    """Map a boolean state key to a label, None if not yet reported."""
+    value = data.get(key)
+    if value is None:
+        return None
+    return on if value else off
 
 
 # Define value functions separately to avoid serialization issues
-VALUE_FUNCTIONS: dict[str, Callable[[dict[str, Any] | None], Any | None]] = {
-    "power": lambda data: "On" if data and data.get("power") else "Off",
-    "current_temp": lambda data: data.get("current_temp") if data else None,
-    "target_temp": lambda data: data.get("target_temp") if data else None,
-    "hold": lambda data: "Hold" if data and data.get("hold") else "Normal",
-    "lifted": lambda data: "Lifted" if data and data.get("lifted") else "On Base",
-    "countdown": lambda data: data.get("countdown") if data else None,
+VALUE_FUNCTIONS: dict[str, Callable[[dict[str, Any]], Any | None]] = {
+    "power": lambda data: _label(data, "power", "On", "Off"),
+    "current_temp": lambda data: data.get("current_temp"),
+    "target_temp": lambda data: data.get("target_temp"),
+    "hold": lambda data: _label(data, "hold", "Hold", "Normal"),
+    "lifted": lambda data: _label(data, "lifted", "Lifted", "On Base"),
+    "countdown": lambda data: data.get("countdown"),
 }
 
 
-def get_sensor_descriptions() -> list[FellowStaggSensorEntityDescription]:
-    """Get sensor descriptions."""
-    return [
-        FellowStaggSensorEntityDescription(
-            key="power",
-            name="Power",
-            icon="mdi:power",
-        ),
-        FellowStaggSensorEntityDescription(
-            key="current_temp",
-            name="Current Temperature",
-            icon="mdi:thermometer",
-            device_class=SensorDeviceClass.TEMPERATURE,
-            native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
-        ),
-        FellowStaggSensorEntityDescription(
-            key="target_temp",
-            name="Target Temperature",
-            icon="mdi:thermometer",
-            device_class=SensorDeviceClass.TEMPERATURE,
-            native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
-        ),
-        FellowStaggSensorEntityDescription(
-            key="hold",
-            name="Hold Mode",
-            icon="mdi:timer",
-        ),
-        FellowStaggSensorEntityDescription(
-            key="lifted",
-            name="Kettle Position",
-            icon="mdi:cup",
-        ),
-        FellowStaggSensorEntityDescription(
-            key="countdown",
-            name="Countdown",
-            icon="mdi:timer",
-        ),
-    ]
-
-
-# Get sensor descriptions once at module load
-SENSOR_DESCRIPTIONS = get_sensor_descriptions()
+SENSOR_DESCRIPTIONS: list[SensorEntityDescription] = [
+    SensorEntityDescription(
+        key="power",
+        name="Power",
+        icon="mdi:power",
+    ),
+    SensorEntityDescription(
+        key="current_temp",
+        name="Current Temperature",
+        icon="mdi:thermometer",
+        device_class=SensorDeviceClass.TEMPERATURE,
+    ),
+    SensorEntityDescription(
+        key="target_temp",
+        name="Target Temperature",
+        icon="mdi:thermometer",
+        device_class=SensorDeviceClass.TEMPERATURE,
+    ),
+    SensorEntityDescription(
+        key="hold",
+        name="Hold Mode",
+        icon="mdi:timer",
+    ),
+    SensorEntityDescription(
+        key="lifted",
+        name="Kettle Position",
+        icon="mdi:cup",
+    ),
+    SensorEntityDescription(
+        key="countdown",
+        name="Countdown",
+        icon="mdi:timer",
+    ),
+]
 
 
 async def async_setup_entry(
@@ -91,33 +85,26 @@ async def async_setup_entry(
     )
 
 
-class FellowStaggSensor(CoordinatorEntity[FellowStaggDataUpdateCoordinator], SensorEntity):
+class FellowStaggSensor(FellowStaggEntity, SensorEntity):
     """Fellow Stagg sensor."""
-
-    entity_description: FellowStaggSensorEntityDescription
-    _attr_has_entity_name = True
 
     def __init__(
         self,
         coordinator: FellowStaggDataUpdateCoordinator,
-        description: FellowStaggSensorEntityDescription,
+        description: SensorEntityDescription,
     ) -> None:
         """Initialize the sensor."""
-        super().__init__(coordinator)
+        super().__init__(coordinator, description.key)
         self.entity_description = description
-        self._attr_unique_id = f"{coordinator._address}_{description.key}"
-        self._attr_device_info = coordinator.device_info
-
-        # Update unit of measurement based on kettle's current units
-        if description.device_class == SensorDeviceClass.TEMPERATURE:
-            is_fahrenheit = coordinator.data.get("units") == "F"
-            self._attr_native_unit_of_measurement = (
-                UnitOfTemperature.FAHRENHEIT if is_fahrenheit else UnitOfTemperature.CELSIUS
-            )
 
     @property
-    def native_value(self) -> str | None:
+    def native_unit_of_measurement(self) -> str | None:
+        """Temperature sensors follow the kettle's unit."""
+        if self.entity_description.device_class == SensorDeviceClass.TEMPERATURE:
+            return self.coordinator.temperature_unit
+        return self.entity_description.native_unit_of_measurement
+
+    @property
+    def native_value(self) -> Any | None:
         """Return the state of the sensor."""
-        if self.coordinator.data is None:
-            return None
-        return VALUE_FUNCTIONS[self.entity_description.key](self.coordinator.data)
+        return VALUE_FUNCTIONS[self.entity_description.key](self.data)

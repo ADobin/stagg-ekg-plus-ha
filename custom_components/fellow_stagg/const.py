@@ -11,6 +11,11 @@ MAX_TEMP_F = 212
 MIN_TEMP_C = 40
 MAX_TEMP_C = 100
 
+# Consecutive failed polls tolerated (last state kept) before entities become unavailable
+MAX_FAILED_POLLS = 3
+# Delay between sending a command and re-polling the kettle
+COMMAND_SETTLE_DELAY = 0.5  # seconds
+
 # BLE UUIDs for the Fellow Stagg kettle’s “Serial Port Service”
 SERVICE_UUID = "00001820-0000-1000-8000-00805f9b34fb"
 CHAR_UUID = "00002A80-0000-1000-8000-00805f9b34fb"
