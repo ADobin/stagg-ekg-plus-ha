@@ -1,0 +1,13 @@
+{
+  "entity": {
+    "select": {
+      "temperature_unit": {
+        "state": {
+          "auto": "Auto (Home Assistant unit system)",
+          "fahrenheit": "Fahrenheit",
+          "celsius": "Celsius"
+        }
+      }
+    }
+  }
+}

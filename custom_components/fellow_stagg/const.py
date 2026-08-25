@@ -5,6 +5,13 @@ DEFAULT_POLLING_INTERVAL = 5   # seconds
 MIN_POLLING_INTERVAL = 5
 MAX_POLLING_INTERVAL = 60
 
+# Unit used until the kettle reports its own; "auto" follows Home Assistant's unit system.
+CONF_TEMPERATURE_UNIT = "temperature_unit"
+UNIT_AUTO = "auto"
+UNIT_FAHRENHEIT = "fahrenheit"
+UNIT_CELSIUS = "celsius"
+TEMPERATURE_UNIT_OPTIONS = [UNIT_AUTO, UNIT_FAHRENHEIT, UNIT_CELSIUS]
+
 # Target temperature range accepted by the kettle
 MIN_TEMP_F = 104
 MAX_TEMP_F = 212

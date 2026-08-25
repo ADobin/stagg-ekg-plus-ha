@@ -23,6 +23,7 @@ from homeassistant.helpers.update_coordinator import (
 from .const import (
   COMMAND_SETTLE_DELAY,
   CONF_POLLING_INTERVAL,
+  CONF_TEMPERATURE_UNIT,
   DEFAULT_POLLING_INTERVAL,
   DOMAIN,
   MAX_FAILED_POLLS,
@@ -30,6 +31,9 @@ from .const import (
   MAX_TEMP_F,
   MIN_TEMP_C,
   MIN_TEMP_F,
+  UNIT_AUTO,
+  UNIT_CELSIUS,
+  UNIT_FAHRENHEIT,
 )
 from .kettle_ble import KettleBLEClient, KettleError
 
@@ -39,6 +43,7 @@ PLATFORMS: list[Platform] = [
   Platform.SENSOR,
   Platform.SWITCH,
   Platform.NUMBER,
+  Platform.SELECT,
   Platform.WATER_HEATER,
 ]
 
@@ -73,7 +78,12 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
   @property
   def fallback_temperature_unit(self) -> str:
-    """Unit to assume until the kettle reports one: Home Assistant's unit system."""
+    """Unit to assume until the kettle reports one: the configured option, else HA's unit system."""
+    option = self.config_entry.options.get(CONF_TEMPERATURE_UNIT, UNIT_AUTO)
+    if option == UNIT_FAHRENHEIT:
+      return UnitOfTemperature.FAHRENHEIT
+    if option == UNIT_CELSIUS:
+      return UnitOfTemperature.CELSIUS
     return self.hass.config.units.temperature_unit
 
   @property
