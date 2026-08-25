@@ -6,7 +6,7 @@ rules:
   appropriate-polling: done
   brands: todo
   common-modules: done
-  config-flow: todo
+  config-flow: done
   config-flow-test-coverage: todo
   dependency-transparency: done
   docs-actions:
@@ -42,7 +42,7 @@ rules:
   # Gold
   devices: done
   diagnostics: done
-  discovery: todo
+  discovery: done
   discovery-update-info:
     status: exempt
     comment: The Bluetooth address is the device identity and cannot change.

@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import timedelta
 import logging
 
-from homeassistant.const import Platform
+from homeassistant.const import CONF_ADDRESS, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryError
 
@@ -43,3 +43,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: FellowStaggConfigEntry) 
 async def async_unload_entry(hass: HomeAssistant, entry: FellowStaggConfigEntry) -> bool:
   """Unload a config entry; the coordinator disconnects via async_shutdown."""
   return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: FellowStaggConfigEntry) -> bool:
+  """Migrate the data key bluetooth_address (1.1) to address (1.2)."""
+  if entry.version != 1:
+    return False
+  if entry.minor_version < 2:
+    data = {k: v for k, v in entry.data.items() if k != "bluetooth_address"}
+    data[CONF_ADDRESS] = entry.data.get(CONF_ADDRESS) or entry.data.get("bluetooth_address") or entry.unique_id
+    hass.config_entries.async_update_entry(entry, data=data, minor_version=2)
+  return True

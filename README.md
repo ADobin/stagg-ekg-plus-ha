@@ -35,10 +35,14 @@ A Home Assistant integration for the Fellow Stagg EKG+ electric kettle. Control 
 
 ## Configuration
 
-The integration can be set up in two ways:
+The kettle is discovered automatically while it advertises (it stops a few minutes
+after use, so lift it or press a button): Home Assistant shows it under
+**Settings → Devices & services → Discovered**. You can also add it manually via
+**Add Integration → Fellow Stagg EKG+**, which lists discovered kettles or asks for
+the Bluetooth address if none is visible.
 
-1. **Automatic Discovery**: The kettle will be automatically discovered if Bluetooth is enabled in Home Assistant
-2. **Manual Configuration**: You can manually add the kettle by providing its MAC address
+A kettle that was unreachable when Home Assistant started is set up as soon as it
+advertises again.
 
 ## Usage
 
@@ -82,7 +86,7 @@ a few seconds to reflect a change, so the state may update on a following poll.
 The kettle stops advertising a few minutes after it is last used but still accepts
 directed connections; the integration keeps the last seen advertisement to connect
 to an idle kettle. After a Home Assistant restart the kettle must advertise once
-(lift it or press a button) before it can be reached.
+(lift it or press a button); the integration then connects within seconds.
 
 ## Requirements
 

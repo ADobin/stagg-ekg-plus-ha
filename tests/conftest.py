@@ -11,7 +11,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.syrupy import HomeAssistantSnapshotExtension
 from syrupy.assertion import SnapshotAssertion
 
-from custom_components.fellow_stagg.const import DOMAIN
+from custom_components.fellow_stagg.const import DOMAIN, SERVICE_UUID
 
 ADDRESS = "AA:BB:CC:DD:EE:FF"
 
@@ -58,6 +58,22 @@ def _mock_bluetooth(mock_bluetooth: None):
 def _no_settle_delay():
     with patch("custom_components.fellow_stagg.coordinator.COMMAND_SETTLE_DELAY", 0):
         yield
+
+
+def service_info(address: str = ADDRESS, name: str = "FELLOW46B9", service_uuids: list[str] | None = None):
+    """Advertisement as HA's bluetooth integration would deliver it."""
+    from bleak.backends.device import BLEDevice
+    from bleak.backends.scanner import AdvertisementData
+    from habluetooth import BluetoothServiceInfoBleak
+
+    uuids = [SERVICE_UUID] if service_uuids is None else service_uuids
+    return BluetoothServiceInfoBleak.from_device_and_advertisement_data(
+        BLEDevice(address, name, {}),
+        AdvertisementData(name, {}, {}, uuids, None, -60, ()),
+        "hci0",
+        0.0,
+        True,
+    )
 
 
 @pytest.fixture

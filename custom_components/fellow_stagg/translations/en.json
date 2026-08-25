@@ -1,4 +1,32 @@
 {
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "bluetooth_confirm": {
+        "description": "Do you want to set up {name}?"
+      },
+      "user": {
+        "description": "Select the kettle to set up.",
+        "data": {
+          "address": "Kettle"
+        }
+      },
+      "manual": {
+        "description": "No kettle was discovered. Enter its Bluetooth address. The kettle only advertises for a few minutes after use, so lift it or press a button before Home Assistant first connects.",
+        "data": {
+          "address": "Bluetooth address"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This kettle is already configured",
+      "already_in_progress": "Configuration flow is already in progress",
+      "no_devices_found": "No kettle found"
+    },
+    "error": {
+      "invalid_address": "Enter a Bluetooth address like AA:BB:CC:DD:EE:FF"
+    }
+  },
   "entity": {
     "number": {
       "target_temperature": {

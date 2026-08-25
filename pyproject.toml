@@ -2,6 +2,7 @@
 asyncio_mode = "auto"
 testpaths = ["tests"]
 norecursedirs = [".git", ".venv"]
+markers = ["discovered: advertisements returned by async_discovered_service_info"]
 
 [tool.ruff]
 target-version = "py314"
