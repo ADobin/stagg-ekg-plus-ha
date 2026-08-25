@@ -5,10 +5,11 @@ import logging
 from typing import Any
 
 from homeassistant.components.water_heater import (
+  STATE_ELECTRIC,
   WaterHeaterEntity,
   WaterHeaterEntityFeature,
 )
-from homeassistant.const import ATTR_TEMPERATURE
+from homeassistant.const import ATTR_TEMPERATURE, PRECISION_WHOLE, STATE_OFF
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -32,12 +33,14 @@ class FellowStaggWaterHeater(FellowStaggEntity, WaterHeaterEntity):
   """Water heater entity for Fellow Stagg kettle; unit and range follow the kettle."""
 
   _attr_name = None  # primary entity: takes the device name
-  _attr_translation_key = "kettle"
   _attr_supported_features = (
-    WaterHeaterEntityFeature.TARGET_TEMPERATURE |
-    WaterHeaterEntityFeature.ON_OFF
+    WaterHeaterEntityFeature.TARGET_TEMPERATURE
+    | WaterHeaterEntityFeature.OPERATION_MODE
+    | WaterHeaterEntityFeature.ON_OFF
   )
-  _attr_operation_list = ["off", "on"]
+  _attr_operation_list = [STATE_OFF, STATE_ELECTRIC]
+  _attr_precision = PRECISION_WHOLE
+  _attr_target_temperature_step = 1
 
   def __init__(self, coordinator: FellowStaggDataUpdateCoordinator) -> None:
     """Initialize the water heater."""
@@ -74,7 +77,11 @@ class FellowStaggWaterHeater(FellowStaggEntity, WaterHeaterEntity):
     power = self.data.get("power")
     if power is None:
       return None
-    return "on" if power else "off"
+    return STATE_ELECTRIC if power else STATE_OFF
+
+  async def async_set_operation_mode(self, operation_mode: str) -> None:
+    """Set operation mode."""
+    await self.coordinator.async_set_power(operation_mode == STATE_ELECTRIC)
 
   async def async_set_temperature(self, **kwargs: Any) -> None:
     """Set new target temperature."""

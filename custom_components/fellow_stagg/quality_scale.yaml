@@ -14,7 +14,7 @@ rules:
     comment: No custom actions.
   docs-high-level-description: done
   docs-installation-instructions: done
-  docs-removal-instructions: todo
+  docs-removal-instructions: done
   entity-event-setup:
     status: exempt
     comment: Entities are updated by the coordinator only.
@@ -57,10 +57,10 @@ rules:
     status: exempt
     comment: One kettle per config entry.
   entity-category: done
-  entity-device-class: todo
+  entity-device-class: done
   entity-disabled-by-default: done
   entity-translations: done
-  exception-translations: todo
+  exception-translations: done
   icon-translations: done
   reconfiguration-flow:
     status: exempt

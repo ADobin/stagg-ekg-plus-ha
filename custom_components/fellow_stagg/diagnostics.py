@@ -24,7 +24,6 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: FellowS
       "failed_polls": coordinator._failed_polls,
       "update_interval": str(coordinator.update_interval),
       "temperature_unit": coordinator.temperature_unit,
-      "fallback_temperature_unit": coordinator.fallback_temperature_unit,
       "cached_service_info": coordinator._last_service_info is not None,
     },
     "service_info": async_redact_data(service_info.as_dict() if service_info else None, TO_REDACT),

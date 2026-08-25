@@ -13,7 +13,8 @@ from homeassistant.components.bluetooth import (
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_ADDRESS
 
-from .const import DOMAIN, LOCAL_NAME_PREFIX, SERVICE_UUID
+from .const import DOMAIN
+from .kettle_ble import LOCAL_NAME_PREFIX, SERVICE_UUID
 
 MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 

@@ -7,30 +7,28 @@ from unittest.mock import MagicMock
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_system import METRIC_SYSTEM, US_CUSTOMARY_SYSTEM
 import pytest
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
-from custom_components.fellow_stagg.const import (
-    CONF_TEMPERATURE_UNIT,
-    DEFAULT_POLLING_INTERVAL,
-    MAX_FAILED_POLLS,
-    UNIT_CELSIUS,
-    UNIT_FAHRENHEIT,
-)
+from custom_components.fellow_stagg.const import DOMAIN, MAX_FAILED_POLLS, POLLING_INTERVAL
 from custom_components.fellow_stagg.kettle_ble import KettleError
 
 from .conftest import ADDRESS, FULL_STATE_C, FULL_STATE_F
 
-TARGET = f"number.fellow_stagg_ekg_{ADDRESS.replace(':', '_').lower()}_target_temperature"
-TARGET_SENSOR = f"sensor.fellow_stagg_ekg_{ADDRESS.replace(':', '_').lower()}_target_temperature"
-POWER = f"switch.fellow_stagg_ekg_{ADDRESS.replace(':', '_').lower()}_power"
-POSITION = f"sensor.fellow_stagg_ekg_{ADDRESS.replace(':', '_').lower()}_kettle_position"
+PREFIX = f"fellow_stagg_ekg_{ADDRESS.replace(':', '_').lower()}"
+TARGET = f"number.{PREFIX}_target_temperature"
+CURRENT = f"sensor.{PREFIX}_current_temperature"
+COUNTDOWN = f"sensor.{PREFIX}_auto_off_countdown"
+POWER = f"switch.{PREFIX}_power"
+ON_BASE = f"binary_sensor.{PREFIX}_on_base"
+HOLD = f"binary_sensor.{PREFIX}_hold"
 HEATER = f"water_heater.fellow_stagg_ekg_{ADDRESS.replace(':', '_').lower()}"  # primary entity: device name
 
 
-async def advance(hass: HomeAssistant, seconds: float = DEFAULT_POLLING_INTERVAL) -> None:
+async def advance(hass: HomeAssistant, seconds: float = POLLING_INTERVAL) -> None:
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=seconds))
     await hass.async_block_till_done()
 
@@ -45,15 +43,21 @@ async def test_setup_fahrenheit(hass: HomeAssistant, setup_entry) -> None:
     assert target.attributes["unit_of_measurement"] == UnitOfTemperature.FAHRENHEIT
     assert (target.attributes["min"], target.attributes["max"]) == (104, 212)
     assert hass.states.get(POWER).state == "off"
-    assert hass.states.get(POSITION).state == "On Base"
+    assert hass.states.get(ON_BASE).state == "on"
+    assert hass.states.get(HOLD).state == "off"
+    assert hass.states.get(COUNTDOWN).state == "0"
     heater = hass.states.get(HEATER)
+    assert heater.state == "off"
+    assert heater.attributes["operation_list"] == ["off", "electric"]
     assert heater.attributes["temperature"] == 195
     assert heater.attributes["current_temperature"] == 150
 
 
 async def test_setup_celsius(hass: HomeAssistant, setup_entry, kettle: MagicMock) -> None:
+    hass.config.units = METRIC_SYSTEM
     kettle.async_poll.return_value = dict(FULL_STATE_C)
-    await setup_entry()
+    entry = await setup_entry()
+    assert entry.runtime_data.temperature_unit == UnitOfTemperature.CELSIUS
     target = hass.states.get(TARGET)
     assert target.state == "91"
     assert target.attributes["unit_of_measurement"] == UnitOfTemperature.CELSIUS
@@ -69,46 +73,30 @@ async def test_missing_units_falls_back_to_ha_unit_system(
 ) -> None:
     hass.config.units = unit_system
     kettle.async_poll.return_value = {"power": False, "lifted": False}
-    await setup_entry()
+    entry = await setup_entry()
     target = hass.states.get(TARGET)
     assert target.state == "unknown"
     assert target.attributes["unit_of_measurement"] == expected
+    assert entry.runtime_data.temperature_unit == expected
     assert hass.states.get(POWER).state == "off"
 
 
-@pytest.mark.parametrize(
-    ("option", "expected"),
-    [(UNIT_FAHRENHEIT, UnitOfTemperature.FAHRENHEIT), (UNIT_CELSIUS, UnitOfTemperature.CELSIUS)],
-)
-async def test_missing_units_uses_configured_fallback(
-    hass: HomeAssistant, setup_entry, kettle: MagicMock, option, expected
-) -> None:
-    hass.config.units = METRIC_SYSTEM if option == UNIT_FAHRENHEIT else US_CUSTOMARY_SYSTEM
-    kettle.async_poll.return_value = {"power": False}
-    await setup_entry({CONF_TEMPERATURE_UNIT: option})
-    assert hass.states.get(TARGET).attributes["unit_of_measurement"] == expected
-
-
-async def test_kettle_unit_overrides_fallback(hass: HomeAssistant, setup_entry, kettle: MagicMock) -> None:
-    kettle.async_poll.return_value = dict(FULL_STATE_F)
-    await setup_entry({CONF_TEMPERATURE_UNIT: UNIT_CELSIUS})
-    assert hass.states.get(TARGET).attributes["unit_of_measurement"] == UnitOfTemperature.FAHRENHEIT
-
-
 async def test_metadata_updates_once_units_arrive(hass: HomeAssistant, setup_entry, kettle: MagicMock) -> None:
+    """A metric HA with a °F kettle: native values are °F, HA converts for display."""
     hass.config.units = METRIC_SYSTEM
     kettle.async_poll.return_value = {"power": False}
-    await setup_entry()
-    assert hass.states.get(TARGET).attributes["unit_of_measurement"] == UnitOfTemperature.CELSIUS
+    entry = await setup_entry()
+    assert entry.runtime_data.temperature_unit == UnitOfTemperature.CELSIUS
+    assert hass.states.get(TARGET).attributes["max"] == 100
 
     kettle.async_poll.return_value = dict(FULL_STATE_F)
     await advance(hass)
+    assert entry.runtime_data.temperature_unit == UnitOfTemperature.FAHRENHEIT
     target = hass.states.get(TARGET)
-    assert target.state == "195"
-    assert target.attributes["unit_of_measurement"] == UnitOfTemperature.FAHRENHEIT
-    assert target.attributes["max"] == 212
-    # HA converts the °F native value for the metric system; 195 would mean stale °C metadata
-    assert float(hass.states.get(TARGET_SENSOR).state) == pytest.approx(90.56, abs=0.01)
+    assert target.attributes["unit_of_measurement"] == UnitOfTemperature.CELSIUS
+    assert target.state == "91.0"  # 195 °F shown in °C, rounded to the 1° step
+    assert (target.attributes["min"], target.attributes["max"]) == (40, 100)
+    assert float(hass.states.get(CURRENT).state) == pytest.approx(65.6, abs=0.1)  # 150 °F in °C
 
 
 async def test_partial_poll_keeps_known_values(hass: HomeAssistant, setup_entry, kettle: MagicMock) -> None:
@@ -116,6 +104,7 @@ async def test_partial_poll_keeps_known_values(hass: HomeAssistant, setup_entry,
     kettle.async_poll.return_value = {"power": True}
     await advance(hass)
     assert hass.states.get(POWER).state == "on"
+    assert hass.states.get(HEATER).state == "electric"
     target = hass.states.get(TARGET)
     assert target.state == "195"
     assert target.attributes["unit_of_measurement"] == UnitOfTemperature.FAHRENHEIT
@@ -127,8 +116,8 @@ async def test_unit_change_drops_stale_temperatures(hass: HomeAssistant, setup_e
     await advance(hass)
     target = hass.states.get(TARGET)
     assert target.state == "unknown"
-    assert target.attributes["unit_of_measurement"] == UnitOfTemperature.CELSIUS
-    assert hass.states.get(HEATER).attributes["current_temperature"] == 65
+    assert target.attributes["max"] == 212  # HA unit system (°F) display of the 100 °C max
+    assert hass.states.get(HEATER).attributes["current_temperature"] == 149  # 65 °C shown in °F
 
 
 async def test_transient_failures_keep_state_then_unavailable(
@@ -184,5 +173,29 @@ async def test_entity_names_come_from_translations(hass: HomeAssistant, setup_en
     await setup_entry()
     device = f"Fellow Stagg EKG+ {ADDRESS}"
     assert hass.states.get(TARGET).attributes["friendly_name"] == f"{device} Target temperature"
-    assert hass.states.get(POSITION).attributes["friendly_name"] == f"{device} Kettle position"
+    assert hass.states.get(ON_BASE).attributes["friendly_name"] == f"{device} On base"
     assert hass.states.get(HEATER).attributes["friendly_name"] == device
+
+
+async def test_current_temperature_unknown_without_reading(hass: HomeAssistant, setup_entry, kettle: MagicMock) -> None:
+    kettle.async_poll.return_value = {**FULL_STATE_F, "current_temp": None}
+    await setup_entry()
+    assert hass.states.get(CURRENT).state == "unknown"
+    assert hass.states.get(HEATER).attributes["current_temperature"] is None
+
+
+async def test_stale_entities_from_older_versions_are_removed(
+    hass: HomeAssistant, setup_entry, entity_registry: er.EntityRegistry
+) -> None:
+    stale = [
+        ("sensor", f"{ADDRESS}_lifted"),
+        ("sensor", f"{ADDRESS}_power"),
+        ("number", f"{ADDRESS}_polling_interval"),
+        ("select", f"{ADDRESS}_temperature_unit"),
+    ]
+    for platform, unique_id in stale:
+        entity_registry.async_get_or_create(platform, DOMAIN, unique_id)
+    await setup_entry()
+    for platform, unique_id in stale:
+        assert entity_registry.async_get_entity_id(platform, DOMAIN, unique_id) is None
+    assert entity_registry.async_get_entity_id("number", DOMAIN, f"{ADDRESS}_target_temp")

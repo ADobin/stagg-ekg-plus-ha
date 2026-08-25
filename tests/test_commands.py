@@ -3,20 +3,15 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import entity_registry as er
 from homeassistant.util.unit_system import METRIC_SYSTEM, US_CUSTOMARY_SYSTEM
 import pytest
 
-from custom_components.fellow_stagg.const import CONF_TEMPERATURE_UNIT, UNIT_AUTO, UNIT_FAHRENHEIT
 from custom_components.fellow_stagg.kettle_ble import KettleError
 
 from .conftest import FULL_STATE_C, FULL_STATE_F
 from .test_init import HEATER, POWER, TARGET, advance
-
-UNIT_SELECT = TARGET.replace("number.", "select.").replace("target_temperature", "fallback_temperature_unit")
 
 
 async def test_switch_turn_on_sends_power_and_refreshes(hass: HomeAssistant, setup_entry, kettle: MagicMock) -> None:
@@ -27,7 +22,7 @@ async def test_switch_turn_on_sends_power_and_refreshes(hass: HomeAssistant, set
     kettle.async_set_power.assert_awaited_once()
     assert kettle.async_set_power.await_args.args[1] is True
     assert hass.states.get(POWER).state == "on"
-    assert hass.states.get(HEATER).state == "on"
+    assert hass.states.get(HEATER).state == "electric"
 
 
 async def test_switch_turn_off(hass: HomeAssistant, setup_entry, kettle: MagicMock) -> None:
@@ -37,6 +32,7 @@ async def test_switch_turn_off(hass: HomeAssistant, setup_entry, kettle: MagicMo
 
 
 async def test_number_sets_fahrenheit(hass: HomeAssistant, setup_entry, kettle: MagicMock) -> None:
+    hass.config.units = US_CUSTOMARY_SYSTEM
     await setup_entry()
     await hass.services.async_call("number", "set_value", {"entity_id": TARGET, "value": 200}, blocking=True)
     kettle.async_set_temperature.assert_awaited_once()
@@ -45,6 +41,7 @@ async def test_number_sets_fahrenheit(hass: HomeAssistant, setup_entry, kettle: 
 
 
 async def test_number_sets_celsius(hass: HomeAssistant, setup_entry, kettle: MagicMock) -> None:
+    hass.config.units = METRIC_SYSTEM
     kettle.async_poll.return_value = dict(FULL_STATE_C)
     await setup_entry()
     await hass.services.async_call("number", "set_value", {"entity_id": TARGET, "value": 91}, blocking=True)
@@ -53,6 +50,7 @@ async def test_number_sets_celsius(hass: HomeAssistant, setup_entry, kettle: Mag
 
 
 async def test_number_rejects_out_of_range_for_unit(hass: HomeAssistant, setup_entry, kettle: MagicMock) -> None:
+    hass.config.units = METRIC_SYSTEM
     kettle.async_poll.return_value = dict(FULL_STATE_C)
     await setup_entry()
     with pytest.raises(Exception, match="outside valid range 40 - 100"):
@@ -75,7 +73,7 @@ async def test_water_heater_set_temperature_and_power(hass: HomeAssistant, setup
 async def test_command_failure_raises_homeassistant_error(hass: HomeAssistant, setup_entry, kettle: MagicMock) -> None:
     await setup_entry()
     kettle.async_set_power.side_effect = KettleError("Connection closed")
-    with pytest.raises(HomeAssistantError, match="Connection closed"):
+    with pytest.raises(HomeAssistantError, match="Could not reach the kettle: Connection closed"):
         await hass.services.async_call("switch", "turn_on", {"entity_id": POWER}, blocking=True)
     assert hass.states.get(POWER).state == "off"
 
@@ -101,26 +99,22 @@ async def test_delayed_kettle_response_does_not_fail_command(
     assert hass.states.get(POWER).state == "on"
 
 
-async def test_select_writes_option_and_updates_units(
-    hass: HomeAssistant, setup_entry, kettle: MagicMock, entity_registry: er.EntityRegistry
-) -> None:
-    hass.config.units = METRIC_SYSTEM
-    kettle.async_poll.return_value = {"power": False}
-    entry = await setup_entry()
-    assert hass.states.get(UNIT_SELECT) is None  # disabled by default
-
-    entity_registry.async_update_entity(UNIT_SELECT, disabled_by=None)
-    await hass.config_entries.async_reload(entry.entry_id)
-    await hass.async_block_till_done()
-    assert hass.states.get(UNIT_SELECT).state == UNIT_AUTO
-    assert hass.states.get(TARGET).attributes["unit_of_measurement"] == UnitOfTemperature.CELSIUS
-
+async def test_water_heater_operation_mode(hass: HomeAssistant, setup_entry, kettle: MagicMock) -> None:
+    await setup_entry()
     await hass.services.async_call(
-        "select", "select_option", {"entity_id": UNIT_SELECT, "option": UNIT_FAHRENHEIT}, blocking=True
+        "water_heater", "set_operation_mode", {"entity_id": HEATER, "operation_mode": "electric"}, blocking=True
     )
-    await hass.async_block_till_done()
-    assert entry.options[CONF_TEMPERATURE_UNIT] == UNIT_FAHRENHEIT
-    assert hass.states.get(UNIT_SELECT).state == UNIT_FAHRENHEIT
-    target = hass.states.get(TARGET)
-    assert target.attributes["unit_of_measurement"] == UnitOfTemperature.FAHRENHEIT
-    assert target.attributes["max"] == 212
+    assert kettle.async_set_power.await_args.args[1] is True
+    await hass.services.async_call(
+        "water_heater", "set_operation_mode", {"entity_id": HEATER, "operation_mode": "off"}, blocking=True
+    )
+    assert kettle.async_set_power.await_args.args[1] is False
+
+
+async def test_number_converts_from_ha_unit_system(hass: HomeAssistant, setup_entry, kettle: MagicMock) -> None:
+    """A metric HA sets 90 °C on a °F kettle: the kettle receives 194 °F."""
+    hass.config.units = METRIC_SYSTEM
+    await setup_entry()
+    await hass.services.async_call("number", "set_value", {"entity_id": TARGET, "value": 90}, blocking=True)
+    assert kettle.async_set_temperature.await_args.args[1] == 194
+    assert kettle.async_set_temperature.await_args.kwargs == {"fahrenheit": True}

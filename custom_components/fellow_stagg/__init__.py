@@ -1,25 +1,35 @@
 """Support for Fellow Stagg EKG+ kettles."""
 from __future__ import annotations
 
-from datetime import timedelta
 import logging
 
 from homeassistant.const import CONF_ADDRESS, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryError
+from homeassistant.helpers import entity_registry as er
 
-from .const import CONF_POLLING_INTERVAL, DEFAULT_POLLING_INTERVAL
+from .const import DOMAIN
 from .coordinator import FellowStaggConfigEntry, FellowStaggDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [
+  Platform.BINARY_SENSOR,
+  Platform.NUMBER,
   Platform.SENSOR,
   Platform.SWITCH,
-  Platform.NUMBER,
-  Platform.SELECT,
   Platform.WATER_HEATER,
 ]
+
+# Entities removed in 0.5: (platform, unique_id suffix)
+REMOVED_ENTITIES = (
+  (Platform.SENSOR, "power"),
+  (Platform.SENSOR, "hold"),
+  (Platform.SENSOR, "lifted"),
+  (Platform.SENSOR, "target_temp"),
+  (Platform.NUMBER, "polling_interval"),
+  (Platform.SELECT, "temperature_unit"),
+)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: FellowStaggConfigEntry) -> bool:
@@ -29,8 +39,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: FellowStaggConfigEntry) 
     raise ConfigEntryError("Config entry has no Bluetooth address")
 
   _LOGGER.debug("Setting up Fellow Stagg integration for device: %s", address)
-  interval_seconds = entry.options.get(CONF_POLLING_INTERVAL, DEFAULT_POLLING_INTERVAL)
-  coordinator = FellowStaggDataUpdateCoordinator(hass, entry, address, timedelta(seconds=interval_seconds))
+  _remove_stale_entities(hass, address)
+  coordinator = FellowStaggDataUpdateCoordinator(hass, entry, address)
 
   # Raises ConfigEntryNotReady (HA retries setup) if the kettle can't be reached
   await coordinator.async_config_entry_first_refresh()
@@ -38,6 +48,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: FellowStaggConfigEntry) 
 
   await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
   return True
+
+
+def _remove_stale_entities(hass: HomeAssistant, address: str) -> None:
+  """Remove registry entries for entities this version no longer provides."""
+  registry = er.async_get(hass)
+  for platform, suffix in REMOVED_ENTITIES:
+    if entity_id := registry.async_get_entity_id(platform, DOMAIN, f"{address}_{suffix}"):
+      _LOGGER.debug("Removing stale entity %s", entity_id)
+      registry.async_remove(entity_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: FellowStaggConfigEntry) -> bool:

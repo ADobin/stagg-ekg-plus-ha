@@ -28,7 +28,7 @@ async def test_diagnostics_redacts_identifiers(
 
 
 @pytest.mark.parametrize(
-    "platform", [Platform.NUMBER, Platform.SELECT, Platform.SENSOR, Platform.SWITCH, Platform.WATER_HEATER]
+    "platform", [Platform.BINARY_SENSOR, Platform.NUMBER, Platform.SENSOR, Platform.SWITCH, Platform.WATER_HEATER]
 )
 async def test_entities_snapshot(
     hass: HomeAssistant,

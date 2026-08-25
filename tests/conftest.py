@@ -6,12 +6,14 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.core import HomeAssistant
+from homeassistant.util.unit_system import US_CUSTOMARY_SYSTEM
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.syrupy import HomeAssistantSnapshotExtension
 from syrupy.assertion import SnapshotAssertion
 
-from custom_components.fellow_stagg.const import DOMAIN, SERVICE_UUID
+from custom_components.fellow_stagg.const import DOMAIN
+from custom_components.fellow_stagg.kettle_ble import SERVICE_UUID
 
 ADDRESS = "AA:BB:CC:DD:EE:FF"
 
@@ -24,6 +26,7 @@ def frame(msg_type: int, payload: list[int]) -> list[bytes]:
 FULL_STATE_F = {
     "power": False,
     "hold": False,
+    "hold_button": False,
     "target_temp": 195,
     "current_temp": 150,
     "units": "F",
@@ -52,6 +55,12 @@ def _mock_bluetooth(mock_bluetooth: None):
         AsyncMock(return_value=None),
     ):
         yield
+
+
+@pytest.fixture(autouse=True)
+def _us_customary_units(hass: HomeAssistant) -> None:
+    """Default to °F so native kettle values read unchanged; tests set METRIC_SYSTEM where relevant."""
+    hass.config.units = US_CUSTOMARY_SYSTEM
 
 
 @pytest.fixture(autouse=True)

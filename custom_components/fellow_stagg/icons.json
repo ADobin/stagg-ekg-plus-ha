@@ -1,24 +1,31 @@
 {
   "entity": {
-    "number": {
-      "polling_interval": {
-        "default": "mdi:timer-sync"
-      }
-    },
-    "select": {
-      "temperature_unit": {
-        "default": "mdi:thermometer-lines"
-      }
-    },
-    "sensor": {
-      "power": {
-        "default": "mdi:power"
+    "binary_sensor": {
+      "on_base": {
+        "default": "mdi:kettle-off-outline",
+        "state": {
+          "on": "mdi:kettle"
+        }
       },
       "hold": {
-        "default": "mdi:timer"
+        "default": "mdi:kettle-steam-outline",
+        "state": {
+          "on": "mdi:kettle-steam"
+        }
       },
-      "kettle_position": {
-        "default": "mdi:cup"
+      "hold_button": {
+        "default": "mdi:toggle-switch-off-outline",
+        "state": {
+          "on": "mdi:toggle-switch"
+        }
+      }
+    },
+    "switch": {
+      "power": {
+        "default": "mdi:kettle-outline",
+        "state": {
+          "on": "mdi:kettle"
+        }
       }
     }
   }

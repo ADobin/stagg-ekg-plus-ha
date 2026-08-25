@@ -25,20 +25,8 @@ from homeassistant.helpers.update_coordinator import (
   UpdateFailed,
 )
 
-from .const import (
-  COMMAND_SETTLE_DELAY,
-  CONF_TEMPERATURE_UNIT,
-  DOMAIN,
-  MAX_FAILED_POLLS,
-  MAX_TEMP_C,
-  MAX_TEMP_F,
-  MIN_TEMP_C,
-  MIN_TEMP_F,
-  UNIT_AUTO,
-  UNIT_CELSIUS,
-  UNIT_FAHRENHEIT,
-)
-from .kettle_ble import KettleBLEClient, KettleError
+from .const import COMMAND_SETTLE_DELAY, DOMAIN, MAX_FAILED_POLLS, POLLING_INTERVAL
+from .kettle_ble import MAX_TEMP_C, MAX_TEMP_F, MIN_TEMP_C, MIN_TEMP_F, KettleBLEClient, KettleError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -51,14 +39,14 @@ type FellowStaggConfigEntry = ConfigEntry[FellowStaggDataUpdateCoordinator]
 class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
   """Class to manage fetching Fellow Stagg data."""
 
-  def __init__(self, hass: HomeAssistant, entry: ConfigEntry, address: str, polling_interval: timedelta) -> None:
+  def __init__(self, hass: HomeAssistant, entry: ConfigEntry, address: str) -> None:
     """Initialize the coordinator."""
     super().__init__(
       hass,
       _LOGGER,
       config_entry=entry,
       name=f"Fellow Stagg {address}",
-      update_interval=polling_interval,
+      update_interval=timedelta(seconds=POLLING_INTERVAL),
     )
     self.kettle = KettleBLEClient(address)
     self.address = address
@@ -74,24 +62,14 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     )
 
   @property
-  def fallback_temperature_unit(self) -> str:
-    """Unit to assume until the kettle reports one: the configured option, else HA's unit system."""
-    option = self.config_entry.options.get(CONF_TEMPERATURE_UNIT, UNIT_AUTO)
-    if option == UNIT_FAHRENHEIT:
-      return UnitOfTemperature.FAHRENHEIT
-    if option == UNIT_CELSIUS:
-      return UnitOfTemperature.CELSIUS
-    return self.hass.config.units.temperature_unit
-
-  @property
   def temperature_unit(self) -> str:
-    """Unit reported by the kettle, or the fallback while unknown."""
+    """Unit reported by the kettle; Home Assistant's unit system until known."""
     units = (self.data or {}).get("units")
     if units == "F":
       return UnitOfTemperature.FAHRENHEIT
     if units == "C":
       return UnitOfTemperature.CELSIUS
-    return self.fallback_temperature_unit
+    return self.hass.config.units.temperature_unit
 
   @property
   def min_temp(self) -> float:
@@ -183,7 +161,11 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     try:
       await command(self.get_ble_device_for_connect(), *args, **kwargs)
     except KettleError as err:
-      raise HomeAssistantError(f"Fellow Stagg kettle {self.address}: {err}") from err
+      raise HomeAssistantError(
+        translation_domain=DOMAIN,
+        translation_key="command_failed",
+        translation_placeholders={"error": str(err)},
+      ) from err
     await asyncio.sleep(COMMAND_SETTLE_DELAY)
     await self.async_request_refresh()
 
@@ -192,9 +174,9 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     await self._async_command(self.kettle.async_set_power, power_on)
 
   async def async_set_temperature(self, temperature: float) -> None:
-    """Set the target temperature in the current unit."""
+    """Set the target temperature in the kettle's unit."""
     await self._async_command(
       self.kettle.async_set_temperature,
-      int(temperature),
+      round(temperature),
       fahrenheit=self.temperature_unit == UnitOfTemperature.FAHRENHEIT,
     )
