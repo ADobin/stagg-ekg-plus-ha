@@ -1,11 +1,53 @@
 {
   "entity": {
+    "number": {
+      "target_temperature": {
+        "name": "Target temperature"
+      },
+      "polling_interval": {
+        "name": "Polling interval"
+      }
+    },
     "select": {
       "temperature_unit": {
+        "name": "Fallback temperature unit",
         "state": {
           "auto": "Auto (Home Assistant unit system)",
           "fahrenheit": "Fahrenheit",
           "celsius": "Celsius"
+        }
+      }
+    },
+    "sensor": {
+      "power": {
+        "name": "Power"
+      },
+      "current_temperature": {
+        "name": "Current temperature"
+      },
+      "target_temperature": {
+        "name": "Target temperature"
+      },
+      "hold": {
+        "name": "Hold mode"
+      },
+      "kettle_position": {
+        "name": "Kettle position"
+      },
+      "countdown": {
+        "name": "Auto-off countdown"
+      }
+    },
+    "switch": {
+      "power": {
+        "name": "Power"
+      }
+    },
+    "water_heater": {
+      "kettle": {
+        "state": {
+          "off": "Off",
+          "on": "On"
         }
       }
     }

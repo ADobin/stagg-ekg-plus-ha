@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from homeassistant.components.switch import SwitchEntity
+from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -27,7 +27,8 @@ async def async_setup_entry(
 class FellowStaggPowerSwitch(FellowStaggEntity, SwitchEntity):
   """Switch class for Fellow Stagg kettle power control."""
 
-  _attr_name = "Power"
+  _attr_translation_key = "power"
+  _attr_device_class = SwitchDeviceClass.SWITCH
 
   def __init__(self, coordinator: FellowStaggDataUpdateCoordinator) -> None:
     """Initialize the switch."""

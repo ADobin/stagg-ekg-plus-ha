@@ -31,7 +31,8 @@ async def async_setup_entry(
 class FellowStaggWaterHeater(FellowStaggEntity, WaterHeaterEntity):
   """Water heater entity for Fellow Stagg kettle; unit and range follow the kettle."""
 
-  _attr_name = "Water Heater"
+  _attr_name = None  # primary entity: takes the device name
+  _attr_translation_key = "kettle"
   _attr_supported_features = (
     WaterHeaterEntityFeature.TARGET_TEMPERATURE |
     WaterHeaterEntityFeature.ON_OFF

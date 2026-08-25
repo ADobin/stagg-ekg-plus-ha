@@ -28,10 +28,8 @@ async def async_setup_entry(
 class FellowStaggTemperatureUnit(FellowStaggEntity, SelectEntity):
   """Unit assumed until the kettle reports its own; the kettle's unit always wins."""
 
-  _attr_name = "Fallback Temperature Unit"
   _attr_translation_key = "temperature_unit"
   _attr_options = TEMPERATURE_UNIT_OPTIONS
-  _attr_icon = "mdi:thermometer-lines"
   _attr_entity_category = EntityCategory.CONFIG
   _attr_entity_registry_enabled_default = False
 

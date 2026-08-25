@@ -1,0 +1,25 @@
+{
+  "entity": {
+    "number": {
+      "polling_interval": {
+        "default": "mdi:timer-sync"
+      }
+    },
+    "select": {
+      "temperature_unit": {
+        "default": "mdi:thermometer-lines"
+      }
+    },
+    "sensor": {
+      "power": {
+        "default": "mdi:power"
+      },
+      "hold": {
+        "default": "mdi:timer"
+      },
+      "kettle_position": {
+        "default": "mdi:cup"
+      }
+    }
+  }
+}

@@ -6,6 +6,7 @@ from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
+    SensorStateClass,
 )
 from homeassistant.const import UnitOfTime
 from homeassistant.core import HomeAssistant
@@ -37,37 +38,25 @@ VALUE_FUNCTIONS: dict[str, Callable[[dict[str, Any]], Any | None]] = {
 
 
 SENSOR_DESCRIPTIONS: list[SensorEntityDescription] = [
-    SensorEntityDescription(
-        key="power",
-        name="Power",
-        icon="mdi:power",
-    ),
+    SensorEntityDescription(key="power", translation_key="power"),
     SensorEntityDescription(
         key="current_temp",
-        name="Current Temperature",
-        icon="mdi:thermometer",
+        translation_key="current_temperature",
         device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
     ),
     SensorEntityDescription(
         key="target_temp",
-        name="Target Temperature",
-        icon="mdi:thermometer",
+        translation_key="target_temperature",
         device_class=SensorDeviceClass.TEMPERATURE,
+        suggested_display_precision=0,
     ),
-    SensorEntityDescription(
-        key="hold",
-        name="Hold Mode",
-        icon="mdi:timer",
-    ),
-    SensorEntityDescription(
-        key="lifted",
-        name="Kettle Position",
-        icon="mdi:cup",
-    ),
+    SensorEntityDescription(key="hold", translation_key="hold"),
+    SensorEntityDescription(key="lifted", translation_key="kettle_position"),
     SensorEntityDescription(
         key="countdown",
-        name="Countdown",
-        icon="mdi:timer",
+        translation_key="countdown",
         device_class=SensorDeviceClass.DURATION,
         native_unit_of_measurement=UnitOfTime.SECONDS,
     ),

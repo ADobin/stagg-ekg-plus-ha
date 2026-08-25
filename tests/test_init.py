@@ -27,7 +27,7 @@ TARGET = f"number.fellow_stagg_ekg_{ADDRESS.replace(':', '_').lower()}_target_te
 TARGET_SENSOR = f"sensor.fellow_stagg_ekg_{ADDRESS.replace(':', '_').lower()}_target_temperature"
 POWER = f"switch.fellow_stagg_ekg_{ADDRESS.replace(':', '_').lower()}_power"
 POSITION = f"sensor.fellow_stagg_ekg_{ADDRESS.replace(':', '_').lower()}_kettle_position"
-HEATER = f"water_heater.fellow_stagg_ekg_{ADDRESS.replace(':', '_').lower()}_water_heater"
+HEATER = f"water_heater.fellow_stagg_ekg_{ADDRESS.replace(':', '_').lower()}"  # primary entity: device name
 
 
 async def advance(hass: HomeAssistant, seconds: float = DEFAULT_POLLING_INTERVAL) -> None:
@@ -178,3 +178,11 @@ async def test_unload_disconnects(hass: HomeAssistant, setup_entry, kettle: Magi
     await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.NOT_LOADED
     kettle.disconnect.assert_awaited_once()
+
+
+async def test_entity_names_come_from_translations(hass: HomeAssistant, setup_entry) -> None:
+    await setup_entry()
+    device = f"Fellow Stagg EKG+ {ADDRESS}"
+    assert hass.states.get(TARGET).attributes["friendly_name"] == f"{device} Target temperature"
+    assert hass.states.get(POSITION).attributes["friendly_name"] == f"{device} Kettle position"
+    assert hass.states.get(HEATER).attributes["friendly_name"] == device

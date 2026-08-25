@@ -8,7 +8,7 @@ from homeassistant.components.number import (
   NumberEntity,
   NumberMode,
 )
-from homeassistant.const import EntityCategory
+from homeassistant.const import EntityCategory, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -32,7 +32,7 @@ async def async_setup_entry(
 class FellowStaggTargetTemperature(FellowStaggEntity, NumberEntity):
   """Target temperature in the kettle's unit; unit and range follow the kettle."""
 
-  _attr_name = "Target Temperature"
+  _attr_translation_key = "target_temperature"
   _attr_mode = NumberMode.BOX
   _attr_native_step = 1.0
 
@@ -69,13 +69,12 @@ class FellowStaggTargetTemperature(FellowStaggEntity, NumberEntity):
 class FellowStaggPollingInterval(FellowStaggEntity, NumberEntity):
   """Number entity to configure the polling interval."""
 
-  _attr_name = "Polling Interval"
+  _attr_translation_key = "polling_interval"
   _attr_mode = NumberMode.BOX
   _attr_native_step = 1
   _attr_native_min_value = MIN_POLLING_INTERVAL
   _attr_native_max_value = MAX_POLLING_INTERVAL
-  _attr_native_unit_of_measurement = "s"
-  _attr_icon = "mdi:timer-sync"
+  _attr_native_unit_of_measurement = UnitOfTime.SECONDS
   _attr_entity_category = EntityCategory.CONFIG
   _attr_entity_registry_enabled_default = False
 
