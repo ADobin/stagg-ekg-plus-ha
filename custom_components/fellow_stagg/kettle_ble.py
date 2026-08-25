@@ -9,19 +9,25 @@ from typing import Any
 from bleak import BleakClient
 from bleak_retry_connector import establish_connection
 
-from .const import (
-    CHAR_UUID,
-    INIT_SEQUENCE,
-    MAX_TEMP_C,
-    MAX_TEMP_F,
-    MIN_TEMP_C,
-    MIN_TEMP_F,
-    NOTIFY_TIMEOUT,
-    NOTIFY_WINDOW,
-    SERVICE_UUID,
-)
-
 _LOGGER = logging.getLogger(__name__)
+
+# Advertised local name is LOCAL_NAME_PREFIX + 4 hex digits, e.g. FELLOW46B9
+LOCAL_NAME_PREFIX = "FELLOW"
+# "Serial Port Service" and its characteristic
+SERVICE_UUID = "00001820-0000-1000-8000-00805f9b34fb"
+CHAR_UUID = "00002a80-0000-1000-8000-00805f9b34fb"
+# Authenticates the connection; the kettle then streams state frames
+INIT_SEQUENCE = bytes.fromhex("efdd0b3031323334353637383930313233349a6d")
+
+# Target temperature range accepted by the kettle
+MIN_TEMP_F = 104
+MAX_TEMP_F = 212
+MIN_TEMP_C = 40
+MAX_TEMP_C = 100
+
+# Notification window per poll; extended up to the timeout while required frames are missing
+NOTIFY_WINDOW = 2.0   # seconds
+NOTIFY_TIMEOUT = 5.0  # seconds
 
 FRAME_MAGIC = b"\xef\xdd"
 # A poll is complete once these keys have been parsed; others are best-effort.
