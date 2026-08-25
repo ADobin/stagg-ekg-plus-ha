@@ -7,7 +7,7 @@ A Home Assistant integration for the Fellow Stagg EKG+ electric kettle. Control 
 - Control kettle power (on/off)
 - Set target temperature
 - Monitor current temperature
-- Automatic temperature updates
+- Live state updates pushed by the kettle
 - Bluetooth discovery support
 
 ## Installation
@@ -68,22 +68,23 @@ The kettle reports whether it is set to °F or °C and the integration follows i
 the target temperature range is 104–212 °F or 40–100 °C. Until the first poll that
 includes the unit, your Home Assistant unit system is assumed.
 
-### Availability and polling
+### Connection and availability
 
-The kettle is polled every 5 seconds. A poll keeps whatever the kettle
-sent, so a partial response only updates the values it contained. After three
-consecutive failed polls the entities become `unavailable` until a poll succeeds
-again. If the kettle cannot be reached when Home Assistant starts, the config entry
-retries setup in the background.
+Home Assistant keeps a Bluetooth connection to the kettle open and the kettle
+streams its state about once a second, so entities update within a second of a
+change and commands are confirmed by the kettle's own report.
 
-Commands (power, target temperature) raise an error if the kettle cannot be reached.
-After a command the integration re-polls once after a short delay; the kettle can take
-a few seconds to reflect a change, so the state may update on a following poll.
+If the connection drops, the last state is kept for 15 seconds while Home
+Assistant reconnects; after that the entities become `unavailable` until the
+connection is back. A kettle that stops responding is reconnected automatically.
+If the kettle cannot be reached when Home Assistant starts, setup is retried and
+completes as soon as the kettle advertises.
 
 The kettle stops advertising a few minutes after it is last used but still accepts
-directed connections; the integration keeps the last seen advertisement to connect
-to an idle kettle. After a Home Assistant restart the kettle must advertise once
-(lift it or press a button); the integration then connects within seconds.
+connections, and it only accepts one connection at a time: the Fellow app cannot
+connect while Home Assistant is connected. After a Home Assistant restart, or if
+the connection was lost while the kettle was idle for a while, lift the kettle or
+press a button so it advertises again; Home Assistant then connects within seconds.
 
 ## Requirements
 

@@ -2,6 +2,7 @@
 # name: test_diagnostics_redacts_identifiers
   dict({
     'cached_service_info': True,
+    'connected': True,
     'data': dict({
       'countdown': 0,
       'current_temp': 150,
@@ -12,10 +13,10 @@
       'target_temp': 195,
       'units': 'F',
     }),
-    'failed_polls': 0,
+    'disconnects': 0,
     'last_update_success': True,
+    'reconnecting': False,
     'temperature_unit': '°F',
-    'update_interval': '0:00:05',
   })
 # ---
 # name: test_entities_snapshot[binary_sensor][binary_sensor.fellow_stagg_ekg_aa_bb_cc_dd_ee_ff_hold-entry]

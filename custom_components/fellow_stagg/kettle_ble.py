@@ -1,13 +1,20 @@
-"""BLE client for the Fellow Stagg EKG+ kettle."""
+"""BLE client for the Fellow Stagg EKG+ kettle.
+
+The kettle streams its state (~1 frame/s per field) over a single notify
+characteristic once the init sequence has been written. The client keeps
+the connection open and reports state changes through a callback.
+"""
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 import logging
 import time
 from typing import Any
 
 from bleak import BleakClient
-from bleak_retry_connector import establish_connection
+from bleak.backends.device import BLEDevice
+from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,12 +32,13 @@ MAX_TEMP_F = 212
 MIN_TEMP_C = 40
 MAX_TEMP_C = 100
 
-# Notification window per poll; extended up to the timeout while required frames are missing
-NOTIFY_WINDOW = 2.0   # seconds
-NOTIFY_TIMEOUT = 5.0  # seconds
+# Time to wait for the first full state after connecting
+INITIAL_STATE_TIMEOUT = 5.0  # seconds
+# Minimum spacing between writes
+WRITE_DEBOUNCE = 0.2  # seconds
 
 FRAME_MAGIC = b"\xef\xdd"
-# A poll is complete once these keys have been parsed; others are best-effort.
+# The state is complete once these keys have been received; others are best-effort.
 REQUIRED_STATE_KEYS = frozenset({"power", "target_temp", "current_temp"})
 
 # State frame types (byte after the magic)
@@ -46,40 +54,166 @@ CURRENT_TEMP_NO_READING = 0x20
 # 0x08 state frames are 3 bytes; the ~11-byte init echo shares the type and is ignored
 LIFTED_MAX_PAYLOAD = 3
 
+StateCallback = Callable[[dict[str, Any]], None]
+
 
 class KettleError(Exception):
     """Communication with the kettle failed."""
 
 
-def split_frames(data: bytes) -> list[tuple[int, bytes]]:
-    """Split magic-delimited data into (type, payload) frames."""
-    return [(chunk[0], bytes(chunk[1:])) for chunk in data.split(FRAME_MAGIC)[1:] if chunk]
+def split_frames(data: bytes | bytearray) -> list[tuple[int, bytes]]:
+    """Split magic-delimited data into (type, payload) frames; the last frame may be partial."""
+    return [(chunk[0], bytes(chunk[1:])) for chunk in bytes(data).split(FRAME_MAGIC)[1:] if chunk]
+
+
+def parse_frame(msg_type: int, payload: bytes) -> dict[str, Any]:
+    """Decode one frame into state keys; empty for unknown or incomplete frames.
+
+    0x00 power [on]
+    0x01 hold button [on]                  slider position, pulses at setpoint
+    0x02 target temperature [temp, unit]   unit 1 = F, else C
+    0x03 current temperature [temp, unit]  temp 0x20 = no reading
+    0x04 auto-off countdown [lo, hi]       seconds
+    0x06 hold engaged [on]
+    0x08 position [on_base, ...]           3 bytes; 0 = lifted
+    """
+    if not payload:
+        return {}
+    if msg_type == FRAME_POWER:
+        return {"power": payload[0] == 1}
+    if msg_type == FRAME_HOLD_BUTTON:
+        return {"hold_button": payload[0] == 1}
+    if msg_type == FRAME_TARGET_TEMP and len(payload) >= 2:
+        return {"target_temp": payload[0], "units": "F" if payload[1] == 1 else "C"}
+    if msg_type == FRAME_CURRENT_TEMP and len(payload) >= 2:
+        temp = None if payload[0] == CURRENT_TEMP_NO_READING else payload[0]
+        return {"current_temp": temp, "units": "F" if payload[1] == 1 else "C"}
+    if msg_type == FRAME_COUNTDOWN and len(payload) >= 2:
+        return {"countdown": payload[0] | payload[1] << 8}
+    if msg_type == FRAME_HOLD:
+        return {"hold": payload[0] == 1}
+    if msg_type == FRAME_LIFTED and len(payload) <= LIFTED_MAX_PAYLOAD:
+        return {"lifted": payload[0] == 0}
+    return {}
+
+
+def parse_notifications(notifications: list[bytes]) -> dict[str, Any]:
+    """Decode a batch of notifications into a state dict."""
+    state: dict[str, Any] = {}
+    for msg_type, payload in split_frames(b"".join(notifications)):
+        state.update(parse_frame(msg_type, payload))
+    return state
 
 
 class KettleBLEClient:
-    """BLE client for the Fellow Stagg EKG+ kettle."""
+    """Holds the connection to the kettle and decodes its state stream."""
 
-    def __init__(self, address: str) -> None:
+    def __init__(
+        self,
+        address: str,
+        on_update: StateCallback | None = None,
+        on_disconnect: Callable[[], None] | None = None,
+    ) -> None:
         self.address = address
-        self.service_uuid = SERVICE_UUID
-        self.char_uuid = CHAR_UUID
-        self.init_sequence = INIT_SEQUENCE
+        self.on_update = on_update
+        self.on_disconnect = on_disconnect
+        self.state: dict[str, Any] = {}
+        self.last_frame_at = 0.0  # monotonic
         self._client: BleakClient | None = None
+        self._buffer = bytearray()
+        self._complete = asyncio.Event()
         self._sequence = 0  # Command sequence number
-        self._last_command_time = 0.0  # monotonic seconds, for debouncing commands
-        self._lock = asyncio.Lock()  # Serialize polls and commands on the single connection
+        self._last_write_at = 0.0  # monotonic
+        self._lock = asyncio.Lock()
+        self._expect_disconnect = False
 
-    async def _ensure_connected(self, ble_device) -> BleakClient:
-        """Return a connected, authenticated client."""
+    @property
+    def connected(self) -> bool:
+        return self._client is not None and self._client.is_connected
+
+    async def async_connect(
+        self, ble_device: BLEDevice | None, ble_device_callback: Callable[[], BLEDevice | None] | None = None
+    ) -> None:
+        """Connect, subscribe to state frames and authenticate."""
         if ble_device is None:
             raise KettleError("Kettle not reachable: no Bluetooth advertisement seen")
-        if self._client is None or not self._client.is_connected:
-            _LOGGER.debug("Connecting to kettle at %s", self.address)
-            self._client = await establish_connection(
-                BleakClient, ble_device, self.address, max_attempts=3
-            )
-            await self._authenticate()
-        return self._client
+        async with self._lock:
+            if self.connected:
+                return
+            self._buffer.clear()
+            self._complete.clear()
+            self._expect_disconnect = False
+            try:
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    self.address,
+                    disconnected_callback=self._on_disconnected,
+                    ble_device_callback=ble_device_callback,
+                    max_attempts=3,
+                )
+                self._client = client
+                await client.start_notify(CHAR_UUID, self._on_notify)
+                await self._write(client, INIT_SEQUENCE)
+            except Exception as err:
+                await self._reset_connection()
+                raise KettleError(f"Connect failed: {err}") from err
+            self.last_frame_at = time.monotonic()
+            _LOGGER.debug("Connected to kettle %s", self.address)
+
+    async def async_wait_for_state(self, timeout: float = INITIAL_STATE_TIMEOUT) -> bool:
+        """Wait until the required state keys have been received."""
+        if REQUIRED_STATE_KEYS.issubset(self.state):
+            return True
+        try:
+            await asyncio.wait_for(self._complete.wait(), timeout)
+        except TimeoutError:
+            _LOGGER.debug("Incomplete state from %s after %ss: %s", self.address, timeout, self.state)
+            return False
+        return True
+
+    async def async_disconnect(self) -> None:
+        """Disconnect without reporting it as a connection loss."""
+        async with self._lock:
+            self._expect_disconnect = True
+            await self._reset_connection()
+
+    async def async_set_power(self, power_on: bool) -> None:
+        """Turn the kettle on or off."""
+        await self._async_write_command(self._create_command(0, 1 if power_on else 0))
+
+    async def async_set_temperature(self, temp: int, fahrenheit: bool = True) -> None:
+        """Set the target temperature, clamped to the kettle's range for the unit."""
+        low, high = (MIN_TEMP_F, MAX_TEMP_F) if fahrenheit else (MIN_TEMP_C, MAX_TEMP_C)
+        await self._async_write_command(self._create_command(1, max(low, min(high, temp))))
+
+    def _on_notify(self, _sender: Any, data: bytearray) -> None:
+        self._buffer += data
+        delta: dict[str, Any] = {}
+        for msg_type, payload in split_frames(self._buffer):
+            for key, value in parse_frame(msg_type, payload).items():
+                if key not in self.state or self.state[key] != value:
+                    delta[key] = value
+                    self.state[key] = value
+        # Keep only the trailing, possibly partial, frame
+        last = self._buffer.rfind(FRAME_MAGIC)
+        if last > 0:
+            del self._buffer[:last]
+        elif last < 0 and len(self._buffer) > 256:
+            self._buffer.clear()
+        self.last_frame_at = time.monotonic()
+        if REQUIRED_STATE_KEYS.issubset(self.state):
+            self._complete.set()
+        if delta and self.on_update is not None:
+            self.on_update(delta)
+
+    def _on_disconnected(self, client: BleakClient) -> None:
+        if client is not self._client:
+            return
+        self._client = None
+        _LOGGER.debug("Kettle %s disconnected", self.address)
+        if not self._expect_disconnect and self.on_disconnect is not None:
+            self.on_disconnect()
 
     async def _reset_connection(self) -> None:
         """Drop the connection so the next call reconnects."""
@@ -90,18 +224,23 @@ class KettleBLEClient:
             except Exception as err:  # noqa: BLE001
                 _LOGGER.debug("Error disconnecting from %s: %s", self.address, err)
 
-    async def _ensure_debounce(self) -> None:
-        """Keep at least 200ms between writes."""
-        now = time.monotonic()
-        if now - self._last_command_time < 0.2:
-            await asyncio.sleep(0.2)
-        self._last_command_time = now
+    async def _write(self, client: BleakClient, data: bytes) -> None:
+        """Write with at least WRITE_DEBOUNCE between writes."""
+        wait = self._last_write_at + WRITE_DEBOUNCE - time.monotonic()
+        if wait > 0:
+            await asyncio.sleep(wait)
+        await client.write_gatt_char(CHAR_UUID, data)
+        self._last_write_at = time.monotonic()
 
-    async def _authenticate(self) -> None:
-        """Send the init sequence."""
-        _LOGGER.debug("Writing init sequence to characteristic %s", self.char_uuid)
-        await self._ensure_debounce()
-        await self._client.write_gatt_char(self.char_uuid, self.init_sequence)
+    async def _async_write_command(self, command: bytes) -> None:
+        async with self._lock:
+            if self._client is None or not self._client.is_connected:
+                raise KettleError("Not connected to the kettle")
+            try:
+                await self._write(self._client, command)
+            except Exception as err:
+                await self._reset_connection()
+                raise KettleError(f"Command failed: {err}") from err
 
     def _create_command(self, command_type: int, value: int) -> bytes:
         """Build a command frame.
@@ -125,109 +264,3 @@ class KettleBLEClient:
         ])
         self._sequence = (self._sequence + 1) & 0xFF
         return command
-
-    async def async_poll(self, ble_device) -> dict[str, Any]:
-        """Connect, listen for state notifications and return the parsed state.
-
-        Listens for NOTIFY_WINDOW, extending up to NOTIFY_TIMEOUT while
-        REQUIRED_STATE_KEYS are missing. The result may be partial.
-        Raises KettleError on connection failure or if nothing was received.
-        """
-        notifications: list[bytes] = []
-        complete = asyncio.Event()
-
-        def notification_handler(_sender, data: bytearray) -> None:
-            notifications.append(bytes(data))
-            if REQUIRED_STATE_KEYS.issubset(self.parse_notifications(notifications)):
-                complete.set()
-
-        async with self._lock:
-            try:
-                client = await self._ensure_connected(ble_device)
-                await client.start_notify(self.char_uuid, notification_handler)
-            except Exception as err:
-                await self._reset_connection()
-                raise KettleError(f"Poll failed: {err}") from err
-
-            try:
-                await asyncio.sleep(NOTIFY_WINDOW)
-                if not complete.is_set():
-                    await asyncio.wait_for(complete.wait(), NOTIFY_TIMEOUT - NOTIFY_WINDOW)
-            except TimeoutError:
-                _LOGGER.debug(
-                    "Incomplete state from %s after %ss: %s",
-                    self.address, NOTIFY_TIMEOUT, [f.hex() for f in notifications],
-                )
-
-            try:
-                await client.stop_notify(self.char_uuid)
-            except Exception as err:  # noqa: BLE001
-                # Frames already received are still valid; reconnect on the next call.
-                _LOGGER.debug("stop_notify failed for %s: %s", self.address, err)
-                await self._reset_connection()
-
-        state = self.parse_notifications(notifications)
-        if not state:
-            raise KettleError("No state frames received")
-        return state
-
-    async def _async_write_command(self, ble_device, command: bytes) -> None:
-        async with self._lock:
-            try:
-                client = await self._ensure_connected(ble_device)
-                await self._ensure_debounce()
-                await client.write_gatt_char(self.char_uuid, command)
-            except Exception as err:
-                await self._reset_connection()
-                raise KettleError(f"Command failed: {err}") from err
-
-    async def async_set_power(self, ble_device, power_on: bool) -> None:
-        """Turn the kettle on or off."""
-        await self._async_write_command(ble_device, self._create_command(0, 1 if power_on else 0))
-
-    async def async_set_temperature(self, ble_device, temp: int, fahrenheit: bool = True) -> None:
-        """Set the target temperature, clamped to the kettle's range for the unit."""
-        low, high = (MIN_TEMP_F, MAX_TEMP_F) if fahrenheit else (MIN_TEMP_C, MAX_TEMP_C)
-        temp = max(low, min(high, temp))
-        await self._async_write_command(ble_device, self._create_command(1, temp))
-
-    async def disconnect(self) -> None:
-        """Disconnect from the kettle."""
-        async with self._lock:
-            await self._reset_connection()
-
-    def parse_notifications(self, notifications: list[bytes]) -> dict[str, Any]:
-        """Parse notification data into kettle state.
-
-        Frames are ``ef dd <type> <payload>``; header and payload may arrive as
-        separate or coalesced notifications, so the data is joined and split on
-        the magic. Types:
-          0x00 power [on]
-          0x01 hold button [on]           (slider position, pulses at setpoint)
-          0x02 target temperature [temp, unit]   unit 1 = F, else C
-          0x03 current temperature [temp, unit]  temp 0x20 = no reading
-          0x04 auto-off countdown [lo, hi]       seconds
-          0x06 hold engaged [on]
-          0x08 position [on_base, ...]           3 bytes; 0 = lifted
-        """
-        state: dict[str, Any] = {}
-        for msg_type, payload in split_frames(b"".join(notifications)):
-            if not payload:
-                continue
-            if msg_type == FRAME_POWER:
-                state["power"] = payload[0] == 1
-            elif msg_type == FRAME_HOLD_BUTTON:
-                state["hold_button"] = payload[0] == 1
-            elif msg_type == FRAME_TARGET_TEMP and len(payload) >= 2:
-                state["target_temp"] = payload[0]
-                state["units"] = "F" if payload[1] == 1 else "C"
-            elif msg_type == FRAME_CURRENT_TEMP and len(payload) >= 2:
-                state["current_temp"] = None if payload[0] == CURRENT_TEMP_NO_READING else payload[0]
-                state["units"] = "F" if payload[1] == 1 else "C"
-            elif msg_type == FRAME_COUNTDOWN and len(payload) >= 2:
-                state["countdown"] = payload[0] | payload[1] << 8
-            elif msg_type == FRAME_HOLD:
-                state["hold"] = payload[0] == 1
-            elif msg_type == FRAME_LIFTED and len(payload) <= LIFTED_MAX_PAYLOAD:
-                state["lifted"] = payload[0] == 0
-        return state

@@ -1,4 +1,4 @@
-"""Tests for the BLE client: frame parsing and polling."""
+"""Tests for the BLE client: frame parsing, connection handling and commands."""
 from __future__ import annotations
 
 import asyncio
@@ -7,22 +7,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from custom_components.fellow_stagg import kettle_ble
-from custom_components.fellow_stagg.kettle_ble import KettleBLEClient, KettleError
+from custom_components.fellow_stagg.kettle_ble import KettleBLEClient, KettleError, parse_notifications
 
 from .conftest import ADDRESS, frame
 
 
-@pytest.fixture
-def client() -> KettleBLEClient:
-    return KettleBLEClient(ADDRESS)
-
-
-def test_parse_full_state_fahrenheit(client: KettleBLEClient) -> None:
+def test_parse_full_state_fahrenheit() -> None:
     notifications = (
         frame(0, [0]) + frame(1, [0]) + frame(2, [195, 1]) + frame(3, [150, 1])
         + frame(4, [0, 0]) + frame(6, [0]) + frame(8, [1, 1, 0])
     )
-    assert client.parse_notifications(notifications) == {
+    assert parse_notifications(notifications) == {
         "power": False,
         "hold_button": False,
         "target_temp": 195,
@@ -34,134 +29,156 @@ def test_parse_full_state_fahrenheit(client: KettleBLEClient) -> None:
     }
 
 
-def test_parse_celsius_and_lifted(client: KettleBLEClient) -> None:
-    state = client.parse_notifications(frame(2, [91, 0]) + frame(8, [0, 1, 0]) + frame(0, [1]))
+def test_parse_celsius_and_lifted() -> None:
+    state = parse_notifications(frame(2, [91, 0]) + frame(8, [0, 1, 0]) + frame(0, [1]))
     assert state == {"target_temp": 91, "units": "C", "lifted": True, "power": True}
 
 
-def test_parse_partial_state_has_no_units(client: KettleBLEClient) -> None:
-    assert client.parse_notifications(frame(0, [1]) + frame(8, [1, 1, 0])) == {"power": True, "lifted": False}
+def test_parse_empty() -> None:
+    assert parse_notifications([]) == {}
 
 
-def test_parse_empty(client: KettleBLEClient) -> None:
-    assert client.parse_notifications([]) == {}
-
-
-def test_parse_coalesced_and_split_notifications(client: KettleBLEClient) -> None:
-    """Header+payload in one notification, and a payload split across two, parse the same."""
+def test_parse_coalesced_and_split_notifications() -> None:
     coalesced = [bytes([0xEF, 0xDD, 2, 195, 1, 0xEF, 0xDD, 0, 1])]
     split = [bytes([0xEF, 0xDD, 2]), bytes([195]), bytes([1]), bytes([0xEF, 0xDD, 0]), bytes([1])]
     expected = {"target_temp": 195, "units": "F", "power": True}
-    assert client.parse_notifications(coalesced) == expected
-    assert client.parse_notifications(split) == expected
+    assert parse_notifications(coalesced) == expected
+    assert parse_notifications(split) == expected
 
 
-def test_parse_skips_leading_payload(client: KettleBLEClient) -> None:
-    assert client.parse_notifications([bytes([1])] + frame(2, [195, 1])) == {"target_temp": 195, "units": "F"}
+def test_parse_skips_leading_payload_and_empty_header() -> None:
+    assert parse_notifications([bytes([1])] + frame(2, [195, 1])) == {"target_temp": 195, "units": "F"}
+    assert parse_notifications([bytes([0xEF, 0xDD, 2])] + frame(0, [1])) == {"power": True}
 
 
-def test_parse_header_without_payload_is_ignored(client: KettleBLEClient) -> None:
-    assert client.parse_notifications([bytes([0xEF, 0xDD, 2])] + frame(0, [1])) == {"power": True}
-
-
-def test_parse_ignores_unknown_types_and_short_payloads(client: KettleBLEClient) -> None:
+def test_parse_ignores_unknown_types_and_short_payloads() -> None:
     notifications = frame(5, [0xFF] * 4) + frame(7, [0, 0, 0]) + frame(2, [195]) + frame(4, [5]) + frame(0, [0])
-    assert client.parse_notifications(notifications) == {"power": False}
+    assert parse_notifications(notifications) == {"power": False}
 
 
-def test_parse_countdown_is_16_bit_seconds(client: KettleBLEClient) -> None:
-    assert client.parse_notifications(frame(4, [0x10, 0x0E])) == {"countdown": 3600}
-    assert client.parse_notifications(frame(4, [0x2C, 0x01, 0x2C, 0x01])) == {"countdown": 300}
+def test_parse_countdown_is_16_bit_seconds() -> None:
+    assert parse_notifications(frame(4, [0x10, 0x0E])) == {"countdown": 3600}
+    assert parse_notifications(frame(4, [0x2C, 0x01, 0x2C, 0x01])) == {"countdown": 300}
 
 
-def test_parse_hold_engaged_vs_hold_button(client: KettleBLEClient) -> None:
-    assert client.parse_notifications(frame(1, [1]) + frame(6, [0])) == {"hold_button": True, "hold": False}
+def test_parse_hold_engaged_vs_hold_button() -> None:
+    assert parse_notifications(frame(1, [1]) + frame(6, [0])) == {"hold_button": True, "hold": False}
 
 
-def test_parse_current_temp_no_reading_sentinel(client: KettleBLEClient) -> None:
-    assert client.parse_notifications(frame(3, [0x20, 1])) == {"current_temp": None, "units": "F"}
-    assert client.parse_notifications(frame(3, [0x20, 0])) == {"current_temp": None, "units": "C"}
+def test_parse_current_temp_no_reading_sentinel() -> None:
+    assert parse_notifications(frame(3, [0x20, 1])) == {"current_temp": None, "units": "F"}
+    assert parse_notifications(frame(3, [0x20, 0])) == {"current_temp": None, "units": "C"}
 
 
-def test_parse_ignores_init_echo_on_position_type(client: KettleBLEClient) -> None:
+def test_parse_ignores_init_echo_on_position_type() -> None:
     echo = frame(8, list(range(11)))
-    assert client.parse_notifications(echo) == {}
-    assert client.parse_notifications(echo + frame(8, [0, 1, 0])) == {"lifted": True}
+    assert parse_notifications(echo) == {}
+    assert parse_notifications(echo + frame(8, [0, 1, 0])) == {"lifted": True}
 
 
 @pytest.fixture
-def bleak(client: KettleBLEClient):
-    """Connected fake BleakClient whose start_notify replays queued frames."""
+def bleak():
+    """Fake connected BleakClient; .notify(data) delivers a notification."""
     mock = MagicMock(name="BleakClient")
     mock.is_connected = True
     mock.write_gatt_char = AsyncMock()
     mock.stop_notify = AsyncMock()
     mock.disconnect = AsyncMock()
-    mock.frames: list[bytes] = []
+    mock.handler = None
 
     async def start_notify(_uuid, handler):
-        for data in mock.frames:
-            handler(None, bytearray(data))
+        mock.handler = handler
 
     mock.start_notify = AsyncMock(side_effect=start_notify)
-    with (
-        patch.object(kettle_ble, "establish_connection", AsyncMock(return_value=mock)),
-        patch.object(kettle_ble, "NOTIFY_WINDOW", 0),
-        patch.object(kettle_ble, "NOTIFY_TIMEOUT", 0.05),
-    ):
+    mock.notify = lambda data: mock.handler(None, bytearray(data))
+    with patch.object(kettle_ble, "establish_connection", AsyncMock(return_value=mock)) as connect:
+        mock.establish = connect
         yield mock
 
 
-async def test_poll_authenticates_and_returns_state(client: KettleBLEClient, bleak: MagicMock) -> None:
-    bleak.frames = frame(0, [1]) + frame(2, [195, 1]) + frame(3, [150, 1])
-    state = await client.async_poll(MagicMock())
-    assert state == {"power": True, "target_temp": 195, "current_temp": 150, "units": "F"}
-    bleak.write_gatt_char.assert_awaited_once_with(client.char_uuid, client.init_sequence)
-    bleak.stop_notify.assert_awaited_once()
+@pytest.fixture
+def client() -> KettleBLEClient:
+    updates: list[dict] = []
+    disconnects: list[None] = []
+    c = KettleBLEClient(ADDRESS, on_update=updates.append, on_disconnect=lambda: disconnects.append(None))
+    c.updates = updates  # type: ignore[attr-defined]
+    c.disconnects = disconnects  # type: ignore[attr-defined]
+    return c
 
 
-async def test_poll_returns_partial_state_after_timeout(client: KettleBLEClient, bleak: MagicMock) -> None:
-    bleak.frames = frame(0, [1]) + frame(8, [1, 1, 0])
-    assert await client.async_poll(MagicMock()) == {"power": True, "lifted": False}
+async def test_connect_subscribes_then_authenticates(client: KettleBLEClient, bleak: MagicMock) -> None:
+    await client.async_connect(MagicMock())
+    assert client.connected
+    bleak.start_notify.assert_awaited_once()
+    bleak.write_gatt_char.assert_awaited_once_with(kettle_ble.CHAR_UUID, kettle_ble.INIT_SEQUENCE)
+    kwargs = bleak.establish.await_args.kwargs
+    assert kwargs["disconnected_callback"] == client._on_disconnected
+    await client.async_connect(MagicMock())  # idempotent while connected
+    bleak.establish.assert_awaited_once()
 
 
-async def test_poll_without_frames_raises(client: KettleBLEClient, bleak: MagicMock) -> None:
-    with pytest.raises(KettleError, match="No state frames"):
-        await client.async_poll(MagicMock())
-
-
-async def test_poll_without_device_raises(client: KettleBLEClient) -> None:
+async def test_connect_without_device_raises(client: KettleBLEClient) -> None:
     with pytest.raises(KettleError, match="not reachable"):
-        await client.async_poll(None)
+        await client.async_connect(None)
 
 
-async def test_poll_connection_error_resets_client(client: KettleBLEClient, bleak: MagicMock) -> None:
-    bleak.start_notify = AsyncMock(side_effect=OSError("Connection closed"))
-    with pytest.raises(KettleError, match="Connection closed"):
-        await client.async_poll(MagicMock())
+async def test_connect_failure_raises_and_resets(client: KettleBLEClient, bleak: MagicMock) -> None:
+    bleak.start_notify = AsyncMock(side_effect=OSError("boom"))
+    with pytest.raises(KettleError, match="boom"):
+        await client.async_connect(MagicMock())
+    assert not client.connected
     bleak.disconnect.assert_awaited_once()
-    assert client._client is None
 
 
-async def test_poll_keeps_frames_when_stop_notify_fails(client: KettleBLEClient, bleak: MagicMock) -> None:
-    bleak.frames = frame(0, [1]) + frame(2, [195, 1]) + frame(3, [150, 1])
-    bleak.stop_notify = AsyncMock(side_effect=OSError("Connection closed"))
-    state = await client.async_poll(MagicMock())
-    assert state["target_temp"] == 195
-    assert client._client is None
+async def test_notifications_emit_only_changes(client: KettleBLEClient, bleak: MagicMock) -> None:
+    await client.async_connect(MagicMock())
+    for data in frame(0, [0]) + frame(2, [195, 1]) + frame(3, [150, 1]):
+        bleak.notify(data)
+    assert client.updates == [{"power": False}, {"target_temp": 195, "units": "F"}, {"current_temp": 150}]
+    assert await client.async_wait_for_state(0.01)
+
+    for data in frame(0, [0]) + frame(3, [151, 1]):
+        bleak.notify(data)
+    assert client.updates[3:] == [{"current_temp": 151}]
+    assert client.state["current_temp"] == 151
 
 
-async def test_poll_stops_early_once_required_frames_arrive(client: KettleBLEClient, bleak: MagicMock) -> None:
-    bleak.frames = frame(0, [1]) + frame(2, [195, 1]) + frame(3, [150, 1])
-    with patch.object(kettle_ble, "NOTIFY_TIMEOUT", 30):
-        await asyncio.wait_for(client.async_poll(MagicMock()), 1)
+async def test_wait_for_state_times_out(client: KettleBLEClient, bleak: MagicMock) -> None:
+    await client.async_connect(MagicMock())
+    bleak.notify(bytes([0xEF, 0xDD, 0, 1]))
+    assert not await client.async_wait_for_state(0.01)
 
 
-async def test_set_power_and_temperature_commands(client: KettleBLEClient, bleak: MagicMock) -> None:
-    await client.async_set_power(MagicMock(), True)
-    await client.async_set_temperature(MagicMock(), 195, fahrenheit=True)
+async def test_buffer_keeps_only_trailing_frame(client: KettleBLEClient, bleak: MagicMock) -> None:
+    await client.async_connect(MagicMock())
+    bleak.notify(bytes([0xEF, 0xDD, 2, 195, 1, 0xEF, 0xDD, 3]))
+    assert bytes(client._buffer) == bytes([0xEF, 0xDD, 3])
+    bleak.notify(bytes([150, 1]))
+    assert client.state["current_temp"] == 150
+
+
+async def test_unexpected_disconnect_reports(client: KettleBLEClient, bleak: MagicMock) -> None:
+    await client.async_connect(MagicMock())
+    bleak.is_connected = False
+    client._on_disconnected(bleak)
+    assert client.disconnects == [None]
+    assert not client.connected
+
+
+async def test_requested_disconnect_is_silent(client: KettleBLEClient, bleak: MagicMock) -> None:
+    await client.async_connect(MagicMock())
+    await client.async_disconnect()
+    bleak.disconnect.assert_awaited_once()
+    client._on_disconnected(bleak)  # bleak reports the disconnect we asked for
+    assert client.disconnects == []
+
+
+async def test_commands_write_frames(client: KettleBLEClient, bleak: MagicMock) -> None:
+    await client.async_connect(MagicMock())
+    with patch.object(kettle_ble, "WRITE_DEBOUNCE", 0):
+        await client.async_set_power(True)
+        await client.async_set_temperature(195, fahrenheit=True)
     writes = [call.args[1] for call in bleak.write_gatt_char.await_args_list]
-    assert writes[0] == client.init_sequence
     assert writes[1] == bytes([0xEF, 0xDD, 0x0A, 0, 0, 1, 1, 0])
     assert writes[2] == bytes([0xEF, 0xDD, 0x0A, 1, 1, 195, 196, 1])
 
@@ -173,12 +190,29 @@ async def test_set_power_and_temperature_commands(client: KettleBLEClient, bleak
 async def test_set_temperature_clamps(
     client: KettleBLEClient, bleak: MagicMock, temp: int, fahrenheit: bool, expected: int
 ) -> None:
-    await client.async_set_temperature(MagicMock(), temp, fahrenheit=fahrenheit)
+    await client.async_connect(MagicMock())
+    with patch.object(kettle_ble, "WRITE_DEBOUNCE", 0):
+        await client.async_set_temperature(temp, fahrenheit=fahrenheit)
     assert bleak.write_gatt_char.await_args.args[1][5] == expected
 
 
-async def test_command_error_raises_kettle_error(client: KettleBLEClient, bleak: MagicMock) -> None:
-    bleak.write_gatt_char = AsyncMock(side_effect=[None, OSError("boom")])
-    with pytest.raises(KettleError, match="boom"):
-        await client.async_set_power(MagicMock(), False)
-    assert client._client is None
+async def test_command_without_connection_raises(client: KettleBLEClient) -> None:
+    with pytest.raises(KettleError, match="Not connected"):
+        await client.async_set_power(True)
+
+
+async def test_command_error_resets_connection(client: KettleBLEClient, bleak: MagicMock) -> None:
+    await client.async_connect(MagicMock())
+    bleak.write_gatt_char = AsyncMock(side_effect=OSError("boom"))
+    with patch.object(kettle_ble, "WRITE_DEBOUNCE", 0), pytest.raises(KettleError, match="boom"):
+        await client.async_set_power(False)
+    assert not client.connected
+
+
+async def test_write_debounce_spaces_writes(client: KettleBLEClient, bleak: MagicMock) -> None:
+    await client.async_connect(MagicMock())
+    with patch.object(kettle_ble, "WRITE_DEBOUNCE", 0.05):
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        await client.async_set_power(True)
+        assert loop.time() - start >= 0.04

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,7 +14,7 @@ from pytest_homeassistant_custom_component.syrupy import HomeAssistantSnapshotEx
 from syrupy.assertion import SnapshotAssertion
 
 from custom_components.fellow_stagg.const import DOMAIN
-from custom_components.fellow_stagg.kettle_ble import SERVICE_UUID
+from custom_components.fellow_stagg.kettle_ble import REQUIRED_STATE_KEYS, SERVICE_UUID, KettleError
 
 ADDRESS = "AA:BB:CC:DD:EE:FF"
 
@@ -63,12 +64,6 @@ def _us_customary_units(hass: HomeAssistant) -> None:
     hass.config.units = US_CUSTOMARY_SYSTEM
 
 
-@pytest.fixture(autouse=True)
-def _no_settle_delay():
-    with patch("custom_components.fellow_stagg.coordinator.COMMAND_SETTLE_DELAY", 0):
-        yield
-
-
 def service_info(address: str = ADDRESS, name: str = "FELLOW46B9", service_uuids: list[str] | None = None):
     """Advertisement as HA's bluetooth integration would deliver it."""
     from bleak.backends.device import BLEDevice
@@ -110,27 +105,100 @@ def ble_lookup(ble_device: MagicMock):
         yield lookup
 
 
+class FakeKettle:
+    """Stands in for KettleBLEClient: connects instantly and lets tests push state or drop the link."""
+
+    def __init__(self, harness: KettleHarness, address: str, on_update, on_disconnect) -> None:
+        self.harness = harness
+        self.address = address
+        self.on_update = on_update
+        self.on_disconnect = on_disconnect
+        self.state: dict[str, Any] = {}
+        self.connected = False
+        self.last_frame_at = 0.0
+        self.connect_calls: list[Any] = []
+        self.disconnect_calls = 0
+
+    async def async_connect(self, ble_device, ble_device_callback=None) -> None:
+        self.connect_calls.append(ble_device)
+        if ble_device is None:
+            raise KettleError("Kettle not reachable: no Bluetooth advertisement seen")
+        if self.harness.connect_error is not None:
+            raise self.harness.connect_error
+        self.connected = True
+        self.last_frame_at = time.monotonic()
+        if self.harness.initial_state:
+            self.push(self.harness.initial_state)
+
+    async def async_wait_for_state(self, timeout: float = 0) -> bool:
+        return REQUIRED_STATE_KEYS.issubset(self.state)
+
+    async def async_disconnect(self) -> None:
+        self.connected = False
+        self.disconnect_calls += 1
+
+    async def async_set_power(self, power_on: bool) -> None:
+        await self.harness.set_power(power_on)
+
+    async def async_set_temperature(self, temp: int, fahrenheit: bool = True) -> None:
+        await self.harness.set_temperature(temp, fahrenheit=fahrenheit)
+
+    def push(self, delta: dict[str, Any]) -> None:
+        """Deliver a state change as the kettle would."""
+        self.state.update(delta)
+        self.last_frame_at = time.monotonic()
+        self.on_update(dict(delta))
+
+    def drop(self) -> None:
+        """Lose the connection."""
+        self.connected = False
+        self.on_disconnect()
+
+
+class KettleHarness:
+    """Configuration shared by FakeKettle instances plus handles to drive them."""
+
+    def __init__(self) -> None:
+        self.initial_state: dict[str, Any] | None = dict(FULL_STATE_F)
+        self.connect_error: Exception | None = None
+        self.instances: list[FakeKettle] = []
+        self.set_power = AsyncMock()
+        self.set_temperature = AsyncMock()
+        self.advertisement_callbacks: list[Callable[..., Any]] = []
+
+    @property
+    def kettle(self) -> FakeKettle:
+        return self.instances[-1]
+
+    def advertise(self, info=None) -> None:
+        """Deliver an advertisement to the coordinator's bluetooth callback."""
+        for cb in self.advertisement_callbacks:
+            cb(info or service_info(), None)
+
+
 @pytest.fixture
-def kettle(ble_lookup: MagicMock) -> MagicMock:
-    """Mock KettleBLEClient I/O. kettle.async_poll.return_value is the polled state."""
-    client = "custom_components.fellow_stagg.coordinator.KettleBLEClient"
+def kettle(ble_lookup: MagicMock) -> KettleHarness:
+    harness = KettleHarness()
+
+    def make(address, on_update=None, on_disconnect=None):
+        instance = FakeKettle(harness, address, on_update, on_disconnect)
+        harness.instances.append(instance)
+        return instance
+
+    def register_callback(hass, cb, matcher, mode):
+        harness.advertisement_callbacks.append(cb)
+        return lambda: harness.advertisement_callbacks.remove(cb)
+
     with (
-        patch(f"{client}.async_poll", new_callable=AsyncMock) as poll,
-        patch(f"{client}.async_set_power", new_callable=AsyncMock) as power,
-        patch(f"{client}.async_set_temperature", new_callable=AsyncMock) as temperature,
-        patch(f"{client}.disconnect", new_callable=AsyncMock) as disconnect,
+        patch("custom_components.fellow_stagg.coordinator.KettleBLEClient", side_effect=make),
+        patch("custom_components.fellow_stagg.coordinator.async_register_callback", side_effect=register_callback),
+        patch("custom_components.fellow_stagg.coordinator.RECONNECT_BACKOFF", (0,)),
     ):
-        poll.return_value = dict(FULL_STATE_F)
-        mock = MagicMock()
-        mock.async_poll = poll
-        mock.async_set_power = power
-        mock.async_set_temperature = temperature
-        mock.disconnect = disconnect
-        yield mock
+        yield harness
 
 
 @pytest.fixture
-def setup_entry(hass: HomeAssistant, kettle: MagicMock) -> Callable[..., Any]:
+def setup_entry(hass: HomeAssistant, kettle: KettleHarness) -> Callable[..., Any]:
     """Create and set up a config entry; returns the entry."""
 
     async def _setup(options: dict[str, Any] | None = None) -> MockConfigEntry:

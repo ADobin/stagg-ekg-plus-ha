@@ -1,6 +1,7 @@
 """Diagnostics support for Fellow Stagg EKG+ kettles."""
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from homeassistant.components import bluetooth
@@ -21,8 +22,10 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: FellowS
     "coordinator": {
       "data": coordinator.data,
       "last_update_success": coordinator.last_update_success,
-      "failed_polls": coordinator._failed_polls,
-      "update_interval": str(coordinator.update_interval),
+      "connected": coordinator.kettle.connected,
+      "seconds_since_last_frame": round(time.monotonic() - coordinator.kettle.last_frame_at, 1),
+      "disconnects": coordinator.disconnects,
+      "reconnecting": coordinator.reconnecting,
       "temperature_unit": coordinator.temperature_unit,
       "cached_service_info": coordinator._last_service_info is not None,
     },

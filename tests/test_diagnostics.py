@@ -24,7 +24,9 @@ async def test_diagnostics_redacts_identifiers(
     assert ADDRESS not in str(result)
     assert result["coordinator"]["data"]["target_temp"] == 195
     assert result["entry"]["data"] == {"address": "**REDACTED**"}  # migrated from bluetooth_address
-    assert result["coordinator"] == snapshot
+    coordinator = result["coordinator"]
+    assert coordinator.pop("seconds_since_last_frame") < 5
+    assert coordinator == snapshot
 
 
 @pytest.mark.parametrize(

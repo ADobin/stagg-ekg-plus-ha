@@ -1,7 +1,7 @@
 """Config flow tests: discovery, user selection, manual entry, migration."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from homeassistant.config_entries import SOURCE_BLUETOOTH, SOURCE_USER, ConfigEntryState
 from homeassistant.const import CONF_ADDRESS
@@ -27,7 +27,7 @@ def _discovered(request):
         yield
 
 
-async def test_user_selects_discovered_kettle(hass: HomeAssistant, kettle: MagicMock) -> None:
+async def test_user_selects_discovered_kettle(hass: HomeAssistant, kettle) -> None:
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "user"
@@ -51,7 +51,7 @@ async def test_user_lists_only_kettles_by_name_or_service(hass: HomeAssistant) -
 
 
 @pytest.mark.discovered([])
-async def test_manual_entry_when_nothing_discovered(hass: HomeAssistant, kettle: MagicMock) -> None:
+async def test_manual_entry_when_nothing_discovered(hass: HomeAssistant, kettle) -> None:
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "manual"
 
@@ -66,7 +66,7 @@ async def test_manual_entry_when_nothing_discovered(hass: HomeAssistant, kettle:
     assert result["data"] == {CONF_ADDRESS: ADDRESS}
 
 
-async def test_bluetooth_discovery_confirm(hass: HomeAssistant, kettle: MagicMock) -> None:
+async def test_bluetooth_discovery_confirm(hass: HomeAssistant, kettle) -> None:
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": SOURCE_BLUETOOTH}, data=service_info()
     )
@@ -88,13 +88,13 @@ async def test_discovery_of_configured_kettle_aborts(hass: HomeAssistant, setup_
     assert result["type"] is FlowResultType.ABORT and result["reason"] == "already_configured"
 
 
-async def test_discovery_reloads_entry_waiting_for_kettle(hass: HomeAssistant, setup_entry, kettle: MagicMock) -> None:
+async def test_discovery_reloads_entry_waiting_for_kettle(hass: HomeAssistant, setup_entry, kettle) -> None:
     """An advertisement from a kettle whose entry is retrying setup triggers an immediate reload."""
-    kettle.async_poll.side_effect = KettleError("not reachable")
+    kettle.connect_error = KettleError("not reachable")
     entry = await setup_entry()
     assert entry.state is ConfigEntryState.SETUP_RETRY
 
-    kettle.async_poll.side_effect = None
+    kettle.connect_error = None
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": SOURCE_BLUETOOTH}, data=service_info()
     )
@@ -103,7 +103,7 @@ async def test_discovery_reloads_entry_waiting_for_kettle(hass: HomeAssistant, s
     assert entry.state is ConfigEntryState.LOADED
 
 
-async def test_migrates_legacy_bluetooth_address_key(hass: HomeAssistant, kettle: MagicMock) -> None:
+async def test_migrates_legacy_bluetooth_address_key(hass: HomeAssistant, kettle) -> None:
     entry = MockConfigEntry(
         domain=DOMAIN, unique_id=ADDRESS, data={"bluetooth_address": ADDRESS}, minor_version=1
     )
