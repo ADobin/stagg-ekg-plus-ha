@@ -39,7 +39,8 @@ The kettle is discovered automatically while it advertises (it stops a few minut
 after use, so lift it or press a button): Home Assistant shows it under
 **Settings → Devices & services → Discovered**. You can also add it manually via
 **Add Integration → Fellow Stagg EKG+**, which lists discovered kettles or asks for
-the Bluetooth address if none is visible.
+the Bluetooth address if none is visible. Setup connects to the kettle once to verify
+it, so the kettle must be plugged in and not connected to the Fellow app.
 
 A kettle that was unreachable when Home Assistant started is set up as soon as it
 advertises again.
@@ -74,11 +75,11 @@ streams its state about once a second, so entities reflect a change within a
 second of the kettle reporting it. A command returns once it has been sent; the
 resulting state shows up when the kettle reports it.
 
-If the connection drops, the last state is kept for 15 seconds while Home
-Assistant reconnects; after that the entities become `unavailable` until a
-reconnected kettle has reported its full state again. A kettle that stops
-responding is reconnected automatically. If the kettle cannot be reached, or does
-not report its state, when Home Assistant starts, setup is retried and completes as
+If the connection drops, the entities become `unavailable` and Home Assistant
+reconnects immediately, then every 15 seconds and whenever the kettle advertises;
+they are available again once the kettle has reported its full state. A connection
+that stops delivering state is reset. If the kettle cannot be reached, or does not
+report its state, when Home Assistant starts, setup is retried and completes as
 soon as the kettle advertises.
 
 The kettle stops advertising a few minutes after it is last used but still accepts

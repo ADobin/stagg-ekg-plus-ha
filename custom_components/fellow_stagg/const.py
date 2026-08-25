@@ -1,9 +1,7 @@
 DOMAIN = "fellow_stagg"
 
-# Seconds after a connection loss before entities become unavailable
-DISCONNECT_GRACE = 15
-# Link check cadence and the silence (the kettle streams ~1 frame/s) treated as a dead link
-LINK_CHECK_INTERVAL = 5
-FRAME_TIMEOUT = 20
-# Delays between reconnect attempts; the last value repeats
-RECONNECT_BACKOFF = (0, 2, 5, 15, 30, 60)
+# Pushed state resets the coordinator timer, so a refresh only runs when the
+# kettle has been silent this long: it verifies the link or reconnects.
+UPDATE_INTERVAL = 15  # seconds
+# Silence on an open connection treated as a dead link (the kettle streams ~1 frame/s)
+FRAME_TIMEOUT = 20  # seconds

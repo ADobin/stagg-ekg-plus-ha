@@ -8,10 +8,11 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util.unit_system import METRIC_SYSTEM
 import pytest
 
+from custom_components.fellow_stagg.const import UPDATE_INTERVAL
 from custom_components.fellow_stagg.kettle_ble import KettleError
 
 from .conftest import FULL_STATE_C, KettleHarness
-from .test_init import HEATER, POWER, TARGET
+from .test_init import HEATER, POWER, TARGET, advance
 
 
 async def test_switch_turn_on_sends_power(hass: HomeAssistant, setup_entry, kettle: KettleHarness) -> None:
@@ -92,7 +93,7 @@ async def test_command_failure_raises_translated_error(hass: HomeAssistant, setu
     assert hass.states.get(POWER).state == "off"
 
 
-async def test_command_reconnects_when_disconnected(
+async def test_commands_skipped_while_unavailable_then_work_after_reconnect(
     hass: HomeAssistant, setup_entry, kettle: KettleHarness, ble_lookup: MagicMock
 ) -> None:
     entry = await setup_entry()
@@ -101,13 +102,17 @@ async def test_command_reconnects_when_disconnected(
     kettle.kettle.drop()
     await hass.async_block_till_done()
     assert not kettle.kettle.connected
+    assert hass.states.get(POWER).state == "unavailable"
 
-    with pytest.raises(HomeAssistantError, match="no Bluetooth advertisement"):
-        await hass.services.async_call("switch", "turn_on", {"entity_id": POWER}, blocking=True)
+    # HA does not deliver service calls to unavailable entities
+    await hass.services.async_call("switch", "turn_on", {"entity_id": POWER}, blocking=True)
+    kettle.set_power.assert_not_awaited()
 
     ble_lookup.return_value = MagicMock(name="BLEDevice")
-    await hass.services.async_call("switch", "turn_on", {"entity_id": POWER}, blocking=True)
+    kettle.advertise()
+    await advance(hass, UPDATE_INTERVAL + 1)
     assert kettle.kettle.connected
+    await hass.services.async_call("switch", "turn_on", {"entity_id": POWER}, blocking=True)
     kettle.set_power.assert_awaited_once_with(True)
 
 
@@ -123,4 +128,4 @@ async def test_write_failure_is_treated_as_connection_loss(
         await hass.services.async_call("switch", "turn_on", {"entity_id": POWER}, blocking=True)
     await hass.async_block_till_done()
     assert entry.runtime_data.disconnects == 1
-    assert kettle.kettle.connected  # reconnected by the reconnect task
+    assert kettle.kettle.connected  # reconnected immediately

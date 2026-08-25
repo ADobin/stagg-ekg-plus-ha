@@ -15,7 +15,6 @@
     }),
     'disconnects': 0,
     'last_update_success': True,
-    'reconnecting': False,
     'temperature_unit': '°F',
   })
 # ---

@@ -25,7 +25,6 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: FellowS
       "connected": coordinator.kettle.connected,
       "seconds_since_last_frame": round(time.monotonic() - coordinator.kettle.last_frame_at, 1),
       "disconnects": coordinator.disconnects,
-      "reconnecting": coordinator.reconnecting,
       "temperature_unit": coordinator.temperature_unit,
       "cached_service_info": coordinator._last_service_info is not None,
     },

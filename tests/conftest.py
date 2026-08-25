@@ -121,7 +121,7 @@ class FakeKettle:
         self.connect_calls: list[Any] = []
         self.disconnect_calls = 0
 
-    async def async_connect(self, ble_device, ble_device_callback=None) -> None:
+    async def async_connect(self, ble_device) -> None:
         self.connect_calls.append(ble_device)
         if ble_device is None:
             raise KettleError("Kettle not reachable: no Bluetooth advertisement seen")
@@ -153,12 +153,14 @@ class FakeKettle:
         self.state.update(delta)
         self.received.update(delta)
         self.last_frame_at = time.monotonic()
-        self.on_update(dict(delta))
+        if self.on_update is not None:
+            self.on_update(dict(delta))
 
     def drop(self) -> None:
         """Lose the connection."""
         self.connected = False
-        self.on_disconnect()
+        if self.on_disconnect is not None:
+            self.on_disconnect()
 
 
 class KettleHarness:
@@ -197,8 +199,8 @@ def kettle(ble_lookup: MagicMock) -> KettleHarness:
 
     with (
         patch("custom_components.fellow_stagg.coordinator.KettleBLEClient", side_effect=make),
+        patch("custom_components.fellow_stagg.config_flow.KettleBLEClient", side_effect=make),
         patch("custom_components.fellow_stagg.coordinator.async_register_callback", side_effect=register_callback),
-        patch("custom_components.fellow_stagg.coordinator.RECONNECT_BACKOFF", (0,)),
     ):
         yield harness
 

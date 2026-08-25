@@ -14,7 +14,7 @@ from homeassistant.util.unit_system import METRIC_SYSTEM
 import pytest
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
-from custom_components.fellow_stagg.const import DISCONNECT_GRACE, DOMAIN, FRAME_TIMEOUT, LINK_CHECK_INTERVAL
+from custom_components.fellow_stagg.const import DOMAIN, FRAME_TIMEOUT, UPDATE_INTERVAL
 from custom_components.fellow_stagg.kettle_ble import KettleError
 
 from .conftest import ADDRESS, FULL_STATE_C, FULL_STATE_F, KettleHarness
@@ -132,53 +132,45 @@ async def test_current_temperature_unknown_without_reading(
     assert hass.states.get(HEATER).attributes["current_temperature"] is None
 
 
-async def test_connection_loss_keeps_state_then_unavailable_then_recovers(
+async def test_connection_loss_marks_unavailable_and_reconnects_on_tick(
     hass: HomeAssistant, setup_entry, kettle: KettleHarness
 ) -> None:
     await setup_entry()
     kettle.connect_error = KettleError("Connection closed")
     kettle.kettle.drop()
     await hass.async_block_till_done()
-    assert hass.states.get(TARGET).state == "195"  # grace period: last state kept
-
-    await advance(hass, DISCONNECT_GRACE + 1)
     assert hass.states.get(TARGET).state == "unavailable"
     assert hass.states.get(POWER).state == "unavailable"
     assert hass.states.get(HEATER).state == "unavailable"
+    assert len(kettle.kettle.connect_calls) == 2  # immediate reconnect attempt failed
 
     kettle.connect_error = None
-    kettle.advertise()
-    await hass.async_block_till_done()
+    await advance(hass, UPDATE_INTERVAL + 1)  # next tick reconnects
     assert kettle.kettle.connected
     assert hass.states.get(TARGET).state == "195"
     assert hass.states.get(POWER).state == "off"
 
 
-async def test_immediate_reconnect_keeps_entities_available(
-    hass: HomeAssistant, setup_entry, kettle: KettleHarness
-) -> None:
+async def test_immediate_reconnect_restores_entities(hass: HomeAssistant, setup_entry, kettle: KettleHarness) -> None:
     await setup_entry()
     kettle.kettle.drop()
     await hass.async_block_till_done()
     assert kettle.kettle.connected
-    await advance(hass, DISCONNECT_GRACE + 1)
     assert hass.states.get(TARGET).state == "195"
 
 
-async def test_reconnect_without_state_does_not_recover(
+async def test_reconnect_without_state_stays_unavailable(
     hass: HomeAssistant, setup_entry, kettle: KettleHarness
 ) -> None:
     await setup_entry()
     kettle.initial_state = None  # the new connection delivers nothing
     kettle.kettle.drop()
     await hass.async_block_till_done()
-    await advance(hass, DISCONNECT_GRACE + 1)
     assert hass.states.get(TARGET).state == "unavailable"
-    assert kettle.kettle.disconnect_calls >= 1  # dead reconnects are torn down
+    assert not kettle.kettle.connected  # a silent connection is torn down
 
     kettle.initial_state = dict(FULL_STATE_F)
-    kettle.advertise()
-    await hass.async_block_till_done()
+    await advance(hass, UPDATE_INTERVAL + 1)
     assert hass.states.get(TARGET).state == "195"
 
 
@@ -191,12 +183,13 @@ async def test_not_advertising_waits_for_advertisement(
     kettle.kettle.drop()
     await hass.async_block_till_done()
     assert not kettle.kettle.connected
-    assert not entry.runtime_data.reconnecting
+    assert hass.states.get(TARGET).state == "unavailable"
 
     kettle.advertise()
-    await hass.async_block_till_done()
+    await advance(hass, UPDATE_INTERVAL + 1)  # request_refresh is debounced after the failed attempt
     assert kettle.kettle.connected
     assert entry.runtime_data._last_service_info is not None
+    assert hass.states.get(TARGET).state == "195"
 
 
 async def test_cached_device_allows_reconnect_without_advertisement(
@@ -210,13 +203,25 @@ async def test_cached_device_allows_reconnect_without_advertisement(
     assert kettle.kettle.connect_calls[-1] is ble_device
 
 
-async def test_silent_link_is_reset(hass: HomeAssistant, setup_entry, kettle: KettleHarness) -> None:
+async def test_silent_link_is_reset_on_tick(hass: HomeAssistant, setup_entry, kettle: KettleHarness) -> None:
     await setup_entry()
     kettle.kettle.last_frame_at = time.monotonic() - FRAME_TIMEOUT - 1
-    await advance(hass, LINK_CHECK_INTERVAL + 1)
+    await advance(hass, UPDATE_INTERVAL + 1)
     assert kettle.kettle.disconnect_calls == 1
     assert kettle.kettle.connected  # reconnected
     assert hass.states.get(TARGET).state == "195"
+
+
+async def test_idle_kettle_is_not_reconnected_while_frames_flow(
+    hass: HomeAssistant, setup_entry, kettle: KettleHarness
+) -> None:
+    """Unchanged state still counts as frames; the tick must not churn the connection."""
+    await setup_entry()
+    for _ in range(3):
+        kettle.kettle.last_frame_at = time.monotonic()
+        await advance(hass, UPDATE_INTERVAL + 1)
+    assert kettle.kettle.disconnect_calls == 0
+    assert len(kettle.kettle.connect_calls) == 1
 
 
 async def test_unreachable_at_setup_retries(hass: HomeAssistant, setup_entry, kettle: KettleHarness) -> None:
@@ -293,4 +298,3 @@ async def test_hass_stop_disconnects(hass: HomeAssistant, setup_entry, kettle: K
     hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
     await hass.async_block_till_done()
     assert kettle.kettle.disconnect_calls == 1
-    assert not kettle.advertisement_callbacks

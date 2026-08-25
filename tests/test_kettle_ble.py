@@ -7,7 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from custom_components.fellow_stagg import kettle_ble
-from custom_components.fellow_stagg.kettle_ble import KettleBLEClient, KettleError, parse_notifications
+from custom_components.fellow_stagg.kettle_ble import (
+    KettleBLEClient,
+    KettleError,
+    KettleNotSupportedError,
+    parse_notifications,
+)
 
 from .conftest import ADDRESS, frame
 
@@ -118,6 +123,7 @@ async def test_connect_subscribes_then_authenticates(client: KettleBLEClient, bl
     bleak.write_gatt_char.assert_awaited_once_with(bleak.characteristic, kettle_ble.INIT_SEQUENCE, response=False)
     kwargs = bleak.establish.await_args.kwargs
     assert kwargs["disconnected_callback"] == client._on_disconnected
+    assert "ble_device_callback" not in kwargs
     await client.async_connect(MagicMock())  # idempotent while connected
     bleak.establish.assert_awaited_once()
 
@@ -130,7 +136,7 @@ async def test_connect_uses_write_with_response_when_supported(client: KettleBLE
 
 async def test_connect_without_characteristic_raises(client: KettleBLEClient, bleak: MagicMock) -> None:
     bleak.services.get_characteristic.return_value = None
-    with pytest.raises(KettleError, match="not found"):
+    with pytest.raises(KettleNotSupportedError, match="not found"):
         await client.async_connect(MagicMock())
     assert not client.connected
 

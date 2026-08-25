@@ -73,6 +73,10 @@ class KettleError(Exception):
     """Communication with the kettle failed."""
 
 
+class KettleNotSupportedError(KettleError):
+    """The device does not expose the kettle's characteristic."""
+
+
 def split_frames(data: bytes | bytearray) -> list[tuple[int, bytes]]:
     """Split magic-delimited data into (type, payload) frames; the last frame may be partial."""
     return [(chunk[0], bytes(chunk[1:])) for chunk in bytes(data).split(FRAME_MAGIC)[1:] if chunk]
@@ -146,9 +150,7 @@ class KettleBLEClient:
     def connected(self) -> bool:
         return self._client is not None and self._client.is_connected
 
-    async def async_connect(
-        self, ble_device: BLEDevice | None, ble_device_callback: Callable[[], BLEDevice | None] | None = None
-    ) -> None:
+    async def async_connect(self, ble_device: BLEDevice | None) -> None:
         """Connect, subscribe to state frames and authenticate."""
         if ble_device is None:
             raise KettleError("Kettle not reachable: no Bluetooth advertisement seen")
@@ -165,18 +167,20 @@ class KettleBLEClient:
                     ble_device,
                     self.address,
                     disconnected_callback=self._on_disconnected,
-                    ble_device_callback=ble_device_callback,
                     max_attempts=3,
                 )
                 self._client = client
                 characteristic = client.services.get_characteristic(CHAR_UUID)
                 if characteristic is None:
-                    raise KettleError(f"Characteristic {CHAR_UUID} not found; not a Stagg EKG+?")
+                    raise KettleNotSupportedError(f"Characteristic {CHAR_UUID} not found; not a Stagg EKG+?")
                 self._characteristic = characteristic
                 self._write_response = "write" in characteristic.properties
                 _LOGGER.debug("Kettle %s characteristic properties: %s", self.address, characteristic.properties)
                 await client.start_notify(characteristic, self._on_notify)
                 await self._write(client, INIT_SEQUENCE)
+            except KettleError:
+                await self._reset_connection()
+                raise
             except Exception as err:
                 await self._reset_connection()
                 raise KettleError(f"Connect failed: {err}") from err

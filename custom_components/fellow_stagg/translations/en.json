@@ -12,7 +12,7 @@
         }
       },
       "manual": {
-        "description": "No kettle was discovered. Enter its Bluetooth address. The kettle only advertises for a few minutes after use, so lift it or press a button before Home Assistant first connects.",
+        "description": "No kettle was discovered. Enter its Bluetooth address. The kettle only advertises for a few minutes after use, so lift it or press a button first.",
         "data": {
           "address": "Bluetooth address"
         }
@@ -21,10 +21,13 @@
     "abort": {
       "already_configured": "This kettle is already configured",
       "already_in_progress": "Configuration flow is already in progress",
-      "no_devices_found": "No kettle found"
+      "no_devices_found": "No kettle found",
+      "not_supported": "This device is not a Fellow Stagg EKG+"
     },
     "error": {
-      "invalid_address": "Enter a Bluetooth address like AA:BB:CC:DD:EE:FF"
+      "invalid_address": "Enter a Bluetooth address like AA:BB:CC:DD:EE:FF",
+      "cannot_connect": "Could not connect to the kettle. Make sure it is plugged in and not connected to the Fellow app, then try again.",
+      "not_found": "Kettle not found. Lift it or press a button so it advertises, then try again."
     }
   },
   "entity": {
