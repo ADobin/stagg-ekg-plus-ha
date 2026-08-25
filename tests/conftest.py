@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from homeassistant.core import HomeAssistant
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.syrupy import HomeAssistantSnapshotExtension
+from syrupy.assertion import SnapshotAssertion
 
 from custom_components.fellow_stagg.const import DOMAIN
 
@@ -29,6 +31,12 @@ FULL_STATE_F = {
     "lifted": False,
 }
 FULL_STATE_C = {**FULL_STATE_F, "target_temp": 91, "current_temp": 65, "units": "C"}
+
+
+@pytest.fixture
+def snapshot(snapshot: SnapshotAssertion) -> SnapshotAssertion:
+    """Serialize HA states/registry entries without volatile fields."""
+    return snapshot.use_extension(HomeAssistantSnapshotExtension)
 
 
 @pytest.fixture(autouse=True)
