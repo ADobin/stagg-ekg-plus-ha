@@ -13,10 +13,13 @@ jobs:
       matrix:
         include:
           # pytest-homeassistant-custom-component pins one HA release each
+          # Snapshots follow the reference HA's serializer; skip them on the minimum
           - ha: "2026.3.1 (minimum)"
             phacc: "0.13.317"
+            pytest_args: "-k 'not snapshot'"
           - ha: "2026.8.3"
             phacc: ""
+            pytest_args: ""
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.0.1
@@ -27,4 +30,4 @@ jobs:
         # Older HA's usb component still imports pyserial
         run: uv pip install --python .venv/bin/python "pytest-homeassistant-custom-component==${{ matrix.phacc }}" pyserial
       - run: .venv/bin/ruff check custom_components tests
-      - run: .venv/bin/python -m pytest -q
+      - run: .venv/bin/python -m pytest -q ${{ matrix.pytest_args }}
