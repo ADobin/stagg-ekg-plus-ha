@@ -16,7 +16,7 @@ jobs:
           # Snapshots follow the reference HA's serializer; skip them on the minimum
           - ha: "2026.3.1 (minimum)"
             phacc: "0.13.317"
-            pytest_args: "-k 'not snapshot'"
+            pytest_args: "-k 'not snapshot' --snapshot-warn-unused"
           - ha: "2026.8.3"
             phacc: ""
             pytest_args: ""
