@@ -109,3 +109,18 @@ async def test_command_reconnects_when_disconnected(
     await hass.services.async_call("switch", "turn_on", {"entity_id": POWER}, blocking=True)
     assert kettle.kettle.connected
     kettle.set_power.assert_awaited_once_with(True)
+
+
+async def test_write_failure_is_treated_as_connection_loss(
+    hass: HomeAssistant, setup_entry, kettle: KettleHarness
+) -> None:
+    """A failed write drops the link; the coordinator must reconnect (or go unavailable), not stay stale."""
+    entry = await setup_entry()
+    kettle.set_power.side_effect = KettleError("Command failed: ATT error")
+    kettle.kettle.connected = False
+    kettle.kettle.on_disconnect()  # what KettleBLEClient now does after a failed write
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call("switch", "turn_on", {"entity_id": POWER}, blocking=True)
+    await hass.async_block_till_done()
+    assert entry.runtime_data.disconnects == 1
+    assert kettle.kettle.connected  # reconnected by the reconnect task

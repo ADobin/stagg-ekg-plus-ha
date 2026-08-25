@@ -6,7 +6,7 @@ import time
 from unittest.mock import MagicMock
 
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import UnitOfTemperature
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
@@ -86,17 +86,19 @@ async def test_missing_units_fall_back_to_ha_unit_system(
 ) -> None:
     if unit_system is not None:
         hass.config.units = unit_system
-    kettle.initial_state = {"power": False, "lifted": False}
+    # Required keys present but no unit (never seen live; temperature frames carry the unit)
+    kettle.initial_state = {"power": False, "target_temp": 195, "current_temp": None, "lifted": False}
     entry = await setup_entry()
     assert entry.runtime_data.temperature_unit == expected
-    assert hass.states.get(TARGET).state == "unknown"
+    assert hass.states.get(TARGET).state == "195"
+    assert hass.states.get(TARGET).attributes["unit_of_measurement"] == expected
     assert hass.states.get(POWER).state == "off"
 
 
 async def test_metadata_updates_once_units_arrive(hass: HomeAssistant, setup_entry, kettle: KettleHarness) -> None:
     """A metric HA with a °F kettle: native values are °F, HA converts for display."""
     hass.config.units = METRIC_SYSTEM
-    kettle.initial_state = {"power": False}
+    kettle.initial_state = {"power": False, "target_temp": 91, "current_temp": 65}
     entry = await setup_entry()
     assert entry.runtime_data.temperature_unit == UnitOfTemperature.CELSIUS
     assert hass.states.get(TARGET).attributes["max"] == 100
@@ -163,6 +165,23 @@ async def test_immediate_reconnect_keeps_entities_available(
     assert hass.states.get(TARGET).state == "195"
 
 
+async def test_reconnect_without_state_does_not_recover(
+    hass: HomeAssistant, setup_entry, kettle: KettleHarness
+) -> None:
+    await setup_entry()
+    kettle.initial_state = None  # the new connection delivers nothing
+    kettle.kettle.drop()
+    await hass.async_block_till_done()
+    await advance(hass, DISCONNECT_GRACE + 1)
+    assert hass.states.get(TARGET).state == "unavailable"
+    assert kettle.kettle.disconnect_calls >= 1  # dead reconnects are torn down
+
+    kettle.initial_state = dict(FULL_STATE_F)
+    kettle.advertise()
+    await hass.async_block_till_done()
+    assert hass.states.get(TARGET).state == "195"
+
+
 async def test_not_advertising_waits_for_advertisement(
     hass: HomeAssistant, setup_entry, kettle: KettleHarness, ble_lookup: MagicMock
 ) -> None:
@@ -207,8 +226,13 @@ async def test_unreachable_at_setup_retries(hass: HomeAssistant, setup_entry, ke
     assert hass.states.get(TARGET) is None
 
 
-async def test_no_state_at_setup_retries(hass: HomeAssistant, setup_entry, kettle: KettleHarness) -> None:
-    kettle.initial_state = None
+@pytest.mark.parametrize(
+    "initial_state", [None, {"power": False, "lifted": False}, {"power": False, "target_temp": 195}]
+)
+async def test_incomplete_state_at_setup_retries(
+    hass: HomeAssistant, setup_entry, kettle: KettleHarness, initial_state
+) -> None:
+    kettle.initial_state = initial_state
     entry = await setup_entry()
     assert entry.state is ConfigEntryState.SETUP_RETRY
     assert not kettle.kettle.connected
@@ -232,8 +256,12 @@ async def test_entity_names_come_from_translations(hass: HomeAssistant, setup_en
 
 
 async def test_stale_entities_from_older_versions_are_removed(
-    hass: HomeAssistant, setup_entry, entity_registry: er.EntityRegistry
+    hass: HomeAssistant, setup_entry, kettle: KettleHarness, entity_registry: er.EntityRegistry
 ) -> None:
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=ADDRESS, data={"address": ADDRESS}, minor_version=2)
+    entry.add_to_hass(hass)
     stale = [
         ("sensor", f"{ADDRESS}_lifted"),
         ("sensor", f"{ADDRESS}_power"),
@@ -241,8 +269,28 @@ async def test_stale_entities_from_older_versions_are_removed(
         ("select", f"{ADDRESS}_temperature_unit"),
     ]
     for platform, unique_id in stale:
-        entity_registry.async_get_or_create(platform, DOMAIN, unique_id)
-    await setup_entry()
+        entity_registry.async_get_or_create(platform, DOMAIN, unique_id, config_entry=entry)
+    foreign = entity_registry.async_get_or_create("sensor", DOMAIN, "11:22:33:44:55:66_lifted")
+
+    kettle.connect_error = KettleError("unreachable")
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert entity_registry.async_get_entity_id("sensor", DOMAIN, f"{ADDRESS}_lifted")  # kept until setup succeeds
+
+    kettle.connect_error = None
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.LOADED
     for platform, unique_id in stale:
         assert entity_registry.async_get_entity_id(platform, DOMAIN, unique_id) is None
+    assert entity_registry.async_get(foreign.entity_id)  # another kettle's entity is untouched
     assert entity_registry.async_get_entity_id("number", DOMAIN, f"{ADDRESS}_target_temp")
+
+
+async def test_hass_stop_disconnects(hass: HomeAssistant, setup_entry, kettle: KettleHarness) -> None:
+    await setup_entry()
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+    await hass.async_block_till_done()
+    assert kettle.kettle.disconnect_calls == 1
+    assert not kettle.advertisement_callbacks

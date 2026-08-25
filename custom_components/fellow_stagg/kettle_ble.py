@@ -53,6 +53,18 @@ FRAME_LIFTED = 0x08
 CURRENT_TEMP_NO_READING = 0x20
 # 0x08 state frames are 3 bytes; the ~11-byte init echo shares the type and is ignored
 LIFTED_MAX_PAYLOAD = 3
+# Payload lengths at which a frame not yet followed by another magic can be decoded
+EXPECTED_PAYLOAD_LENGTHS: dict[int, tuple[int, ...]] = {
+    FRAME_POWER: (1,),
+    FRAME_HOLD_BUTTON: (1,),
+    FRAME_TARGET_TEMP: (2,),
+    FRAME_CURRENT_TEMP: (2,),
+    FRAME_COUNTDOWN: (2, 4),
+    FRAME_HOLD: (1,),
+    FRAME_LIFTED: (3,),
+}
+# Bound on buffered bytes without a decodable frame
+MAX_BUFFER = 256
 
 StateCallback = Callable[[dict[str, Any]], None]
 
@@ -120,7 +132,10 @@ class KettleBLEClient:
         self.state: dict[str, Any] = {}
         self.last_frame_at = 0.0  # monotonic
         self._client: BleakClient | None = None
+        self._characteristic: Any = None
+        self._write_response = True
         self._buffer = bytearray()
+        self._received: set[str] = set()  # keys seen on the current connection
         self._complete = asyncio.Event()
         self._sequence = 0  # Command sequence number
         self._last_write_at = 0.0  # monotonic
@@ -141,6 +156,7 @@ class KettleBLEClient:
             if self.connected:
                 return
             self._buffer.clear()
+            self._received.clear()
             self._complete.clear()
             self._expect_disconnect = False
             try:
@@ -153,7 +169,13 @@ class KettleBLEClient:
                     max_attempts=3,
                 )
                 self._client = client
-                await client.start_notify(CHAR_UUID, self._on_notify)
+                characteristic = client.services.get_characteristic(CHAR_UUID)
+                if characteristic is None:
+                    raise KettleError(f"Characteristic {CHAR_UUID} not found; not a Stagg EKG+?")
+                self._characteristic = characteristic
+                self._write_response = "write" in characteristic.properties
+                _LOGGER.debug("Kettle %s characteristic properties: %s", self.address, characteristic.properties)
+                await client.start_notify(characteristic, self._on_notify)
                 await self._write(client, INIT_SEQUENCE)
             except Exception as err:
                 await self._reset_connection()
@@ -162,8 +184,8 @@ class KettleBLEClient:
             _LOGGER.debug("Connected to kettle %s", self.address)
 
     async def async_wait_for_state(self, timeout: float = INITIAL_STATE_TIMEOUT) -> bool:
-        """Wait until the required state keys have been received."""
-        if REQUIRED_STATE_KEYS.issubset(self.state):
+        """Wait until the required state keys have been received on this connection."""
+        if REQUIRED_STATE_KEYS.issubset(self._received):
             return True
         try:
             await asyncio.wait_for(self._complete.wait(), timeout)
@@ -189,29 +211,49 @@ class KettleBLEClient:
 
     def _on_notify(self, _sender: Any, data: bytearray) -> None:
         self._buffer += data
+        frames = split_frames(self._buffer)
+        # The last frame is complete only if its payload has a length this type is known to use
+        if frames and len(frames[-1][1]) not in EXPECTED_PAYLOAD_LENGTHS.get(frames[-1][0], ()):
+            frames.pop()
         delta: dict[str, Any] = {}
-        for msg_type, payload in split_frames(self._buffer):
-            for key, value in parse_frame(msg_type, payload).items():
+        for msg_type, payload in frames:
+            parsed = parse_frame(msg_type, payload)
+            if "units" in parsed and parsed["units"] != self.state.get("units"):
+                # Temperatures are in the old unit until re-read
+                for key in ("target_temp", "current_temp"):
+                    self.state.pop(key, None)
+            for key, value in parsed.items():
+                self._received.add(key)
                 if key not in self.state or self.state[key] != value:
                     delta[key] = value
                     self.state[key] = value
-        # Keep only the trailing, possibly partial, frame
-        last = self._buffer.rfind(FRAME_MAGIC)
-        if last > 0:
-            del self._buffer[:last]
-        elif last < 0 and len(self._buffer) > 256:
-            self._buffer.clear()
+        self._trim_buffer()
         self.last_frame_at = time.monotonic()
-        if REQUIRED_STATE_KEYS.issubset(self.state):
+        if REQUIRED_STATE_KEYS.issubset(self._received):
             self._complete.set()
         if delta and self.on_update is not None:
             self.on_update(delta)
+
+    def _trim_buffer(self) -> None:
+        """Keep only the trailing, possibly partial, frame and bound its size."""
+        last = self._buffer.rfind(FRAME_MAGIC)
+        if last > 0:
+            del self._buffer[:last]
+        if len(self._buffer) > MAX_BUFFER:
+            newer = self._buffer.rfind(FRAME_MAGIC, 1)
+            if newer > 0:
+                del self._buffer[:newer]
+            else:
+                self._buffer.clear()
 
     def _on_disconnected(self, client: BleakClient) -> None:
         if client is not self._client:
             return
         self._client = None
         _LOGGER.debug("Kettle %s disconnected", self.address)
+        self._report_connection_lost()
+
+    def _report_connection_lost(self) -> None:
         if not self._expect_disconnect and self.on_disconnect is not None:
             self.on_disconnect()
 
@@ -229,7 +271,7 @@ class KettleBLEClient:
         wait = self._last_write_at + WRITE_DEBOUNCE - time.monotonic()
         if wait > 0:
             await asyncio.sleep(wait)
-        await client.write_gatt_char(CHAR_UUID, data)
+        await client.write_gatt_char(self._characteristic, data, response=self._write_response)
         self._last_write_at = time.monotonic()
 
     async def _async_write_command(self, command: bytes) -> None:
@@ -240,6 +282,7 @@ class KettleBLEClient:
                 await self._write(self._client, command)
             except Exception as err:
                 await self._reset_connection()
+                self._report_connection_lost()
                 raise KettleError(f"Command failed: {err}") from err
 
     def _create_command(self, command_type: int, value: int) -> bytes:

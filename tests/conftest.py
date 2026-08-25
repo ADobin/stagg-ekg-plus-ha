@@ -1,6 +1,7 @@
 """Fixtures for the Fellow Stagg integration tests."""
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 import time
 from typing import Any
@@ -114,6 +115,7 @@ class FakeKettle:
         self.on_update = on_update
         self.on_disconnect = on_disconnect
         self.state: dict[str, Any] = {}
+        self.received: set[str] = set()  # keys seen on the current connection
         self.connected = False
         self.last_frame_at = 0.0
         self.connect_calls: list[Any] = []
@@ -126,12 +128,15 @@ class FakeKettle:
         if self.harness.connect_error is not None:
             raise self.harness.connect_error
         self.connected = True
+        self.received.clear()
         self.last_frame_at = time.monotonic()
         if self.harness.initial_state:
             self.push(self.harness.initial_state)
 
     async def async_wait_for_state(self, timeout: float = 0) -> bool:
-        return REQUIRED_STATE_KEYS.issubset(self.state)
+        if not REQUIRED_STATE_KEYS.issubset(self.received):
+            await asyncio.sleep(0.01)  # let a failing reconnect loop yield instead of spinning
+        return REQUIRED_STATE_KEYS.issubset(self.received)
 
     async def async_disconnect(self) -> None:
         self.connected = False
@@ -146,6 +151,7 @@ class FakeKettle:
     def push(self, delta: dict[str, Any]) -> None:
         """Deliver a state change as the kettle would."""
         self.state.update(delta)
+        self.received.update(delta)
         self.last_frame_at = time.monotonic()
         self.on_update(dict(delta))
 

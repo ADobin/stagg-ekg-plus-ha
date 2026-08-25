@@ -85,6 +85,8 @@ def bleak():
     mock.stop_notify = AsyncMock()
     mock.disconnect = AsyncMock()
     mock.handler = None
+    mock.characteristic = MagicMock(name="Characteristic", properties=["write-without-response", "notify"])
+    mock.services.get_characteristic = MagicMock(return_value=mock.characteristic)
 
     async def start_notify(_uuid, handler):
         mock.handler = handler
@@ -109,12 +111,28 @@ def client() -> KettleBLEClient:
 async def test_connect_subscribes_then_authenticates(client: KettleBLEClient, bleak: MagicMock) -> None:
     await client.async_connect(MagicMock())
     assert client.connected
+    bleak.services.get_characteristic.assert_called_once_with(kettle_ble.CHAR_UUID)
     bleak.start_notify.assert_awaited_once()
-    bleak.write_gatt_char.assert_awaited_once_with(kettle_ble.CHAR_UUID, kettle_ble.INIT_SEQUENCE)
+    assert bleak.start_notify.await_args.args[0] is bleak.characteristic
+    # write mode follows the characteristic's advertised properties, never bleak's deprecated default
+    bleak.write_gatt_char.assert_awaited_once_with(bleak.characteristic, kettle_ble.INIT_SEQUENCE, response=False)
     kwargs = bleak.establish.await_args.kwargs
     assert kwargs["disconnected_callback"] == client._on_disconnected
     await client.async_connect(MagicMock())  # idempotent while connected
     bleak.establish.assert_awaited_once()
+
+
+async def test_connect_uses_write_with_response_when_supported(client: KettleBLEClient, bleak: MagicMock) -> None:
+    bleak.characteristic.properties = ["write", "notify"]
+    await client.async_connect(MagicMock())
+    assert bleak.write_gatt_char.await_args.kwargs == {"response": True}
+
+
+async def test_connect_without_characteristic_raises(client: KettleBLEClient, bleak: MagicMock) -> None:
+    bleak.services.get_characteristic.return_value = None
+    with pytest.raises(KettleError, match="not found"):
+        await client.async_connect(MagicMock())
+    assert not client.connected
 
 
 async def test_connect_without_device_raises(client: KettleBLEClient) -> None:
@@ -141,6 +159,62 @@ async def test_notifications_emit_only_changes(client: KettleBLEClient, bleak: M
         bleak.notify(data)
     assert client.updates[3:] == [{"current_temp": 151}]
     assert client.state["current_temp"] == 151
+
+
+async def test_wait_for_state_requires_frames_from_the_current_connection(
+    client: KettleBLEClient, bleak: MagicMock
+) -> None:
+    await client.async_connect(MagicMock())
+    for data in frame(0, [0]) + frame(2, [195, 1]) + frame(3, [150, 1]):
+        bleak.notify(data)
+    assert await client.async_wait_for_state(0.01)
+    await client.async_disconnect()
+    await client.async_connect(MagicMock())
+    assert client.state["target_temp"] == 195  # last known state is kept...
+    assert not await client.async_wait_for_state(0.01)  # ...but does not count as fresh
+
+
+async def test_unit_change_reemits_unchanged_temperature_byte(client: KettleBLEClient, bleak: MagicMock) -> None:
+    await client.async_connect(MagicMock())
+    for data in frame(3, [65, 1]) + frame(2, [80, 1]):
+        bleak.notify(data)
+    client.updates.clear()
+    for data in frame(3, [65, 0]):
+        bleak.notify(data)
+    assert client.updates == [{"current_temp": 65, "units": "C"}]
+    assert "target_temp" not in client.state  # stale until re-read in the new unit
+    for data in frame(2, [80, 0]):
+        bleak.notify(data)
+    assert client.updates[-1] == {"target_temp": 80}
+
+
+async def test_fragmented_init_echo_is_not_a_position_frame(client: KettleBLEClient, bleak: MagicMock) -> None:
+    await client.async_connect(MagicMock())
+    bleak.notify(bytes([0xEF, 0xDD, 8, 0]))  # first byte of the echo arrives alone
+    assert client.updates == []
+    bleak.notify(bytes(range(1, 11)))  # rest of the 11-byte echo
+    assert client.updates == []
+    bleak.notify(bytes([0xEF, 0xDD, 8, 0, 1, 0]))  # real position frame: lifted
+    assert client.updates == [{"lifted": True}]
+
+
+async def test_trailing_frame_decoded_at_expected_length_only(client: KettleBLEClient, bleak: MagicMock) -> None:
+    await client.async_connect(MagicMock())
+    bleak.notify(bytes([0xEF, 0xDD, 2, 195]))  # half a temperature payload
+    assert client.updates == []
+    bleak.notify(bytes([1]))
+    assert client.updates == [{"target_temp": 195, "units": "F"}]
+
+
+async def test_buffer_is_bounded_without_delimiter(client: KettleBLEClient, bleak: MagicMock) -> None:
+    await client.async_connect(MagicMock())
+    bleak.notify(bytes([0xEF, 0xDD, 7]) + bytes(300))  # oversized unknown frame, never terminated
+    assert len(client._buffer) <= kettle_ble.MAX_BUFFER
+    bleak.notify(bytes(300))  # still no delimiter
+    assert len(client._buffer) <= kettle_ble.MAX_BUFFER
+    for data in frame(0, [1]):
+        bleak.notify(data)
+    assert client.updates == [{"power": True}]
 
 
 async def test_wait_for_state_times_out(client: KettleBLEClient, bleak: MagicMock) -> None:
@@ -181,6 +255,7 @@ async def test_commands_write_frames(client: KettleBLEClient, bleak: MagicMock) 
     writes = [call.args[1] for call in bleak.write_gatt_char.await_args_list]
     assert writes[1] == bytes([0xEF, 0xDD, 0x0A, 0, 0, 1, 1, 0])
     assert writes[2] == bytes([0xEF, 0xDD, 0x0A, 1, 1, 195, 196, 1])
+    assert all(call.kwargs == {"response": False} for call in bleak.write_gatt_char.await_args_list)
 
 
 @pytest.mark.parametrize(
@@ -201,12 +276,15 @@ async def test_command_without_connection_raises(client: KettleBLEClient) -> Non
         await client.async_set_power(True)
 
 
-async def test_command_error_resets_connection(client: KettleBLEClient, bleak: MagicMock) -> None:
+async def test_command_error_resets_connection_and_reports_loss(client: KettleBLEClient, bleak: MagicMock) -> None:
     await client.async_connect(MagicMock())
     bleak.write_gatt_char = AsyncMock(side_effect=OSError("boom"))
     with patch.object(kettle_ble, "WRITE_DEBOUNCE", 0), pytest.raises(KettleError, match="boom"):
         await client.async_set_power(False)
     assert not client.connected
+    assert client.disconnects == [None]
+    client._on_disconnected(bleak)  # bleak's own callback for the same loss is not double-counted
+    assert client.disconnects == [None]
 
 
 async def test_write_debounce_spaces_writes(client: KettleBLEClient, bleak: MagicMock) -> None:

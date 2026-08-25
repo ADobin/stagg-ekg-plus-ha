@@ -21,8 +21,8 @@ from homeassistant.components.bluetooth import (
   async_scanner_by_source,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTemperature
-from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP, UnitOfTemperature
+from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -97,11 +97,11 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
   # ---- setup / teardown
 
   async def _async_setup(self) -> None:
-    """Connect and wait for the first state; HA retries setup if the kettle is unreachable."""
+    """Connect and wait for a full state; HA retries setup if the kettle is unreachable."""
     await self._async_connect()
-    if not await self.kettle.async_wait_for_state() and not self.kettle.state:
+    if not await self.kettle.async_wait_for_state():
       await self.kettle.async_disconnect()
-      raise UpdateFailed(f"No state received from kettle {self.address}")
+      raise UpdateFailed(f"Incomplete state from kettle {self.address}: {self.kettle.state}")
     self._unsubscribe.append(
       async_register_callback(
         self.hass,
@@ -113,6 +113,8 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     self._unsubscribe.append(
       async_track_time_interval(self.hass, self._async_check_link, timedelta(seconds=LINK_CHECK_INTERVAL))
     )
+    # Entries are not unloaded on shutdown; release the kettle's single connection slot anyway
+    self._unsubscribe.append(self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, self._async_on_hass_stop))
 
   async def _async_update_data(self) -> dict[str, Any]:
     """Return the accumulated state (first refresh and manual refreshes only)."""
@@ -129,7 +131,11 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     self._cancel_unavailable_timer()
     if self._reconnect_task is not None:
       self._reconnect_task.cancel()
+      self._reconnect_task = None
     await self.kettle.async_disconnect()
+
+  async def _async_on_hass_stop(self, _event: Event) -> None:
+    await self.async_shutdown()
 
   # ---- connection management
 
@@ -168,9 +174,9 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
   @callback
   def _mark_unavailable(self, _now: datetime) -> None:
+    """No fresh state since the connection was lost (a frame or a completed reconnect cancels this)."""
     self._unavailable_timer = None
-    if not self.kettle.connected:
-      self.async_set_update_error(UpdateFailed(f"Kettle {self.address} disconnected"))
+    self.async_set_update_error(UpdateFailed(f"Kettle {self.address} disconnected"))
 
   def _cancel_unavailable_timer(self) -> None:
     if self._unavailable_timer is not None:
@@ -184,9 +190,12 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
       )
 
   async def _async_reconnect(self) -> None:
-    """Retry with backoff while a BLE device is known; otherwise wait for an advertisement."""
+    """Retry with backoff while a BLE device is known; otherwise wait for an advertisement.
+
+    Recovery requires a full state from the new connection, not just a GATT connection.
+    """
     attempt = 0
-    while not self.kettle.connected:
+    while True:
       await asyncio.sleep(RECONNECT_BACKOFF[min(attempt, len(RECONNECT_BACKOFF) - 1)])
       attempt += 1
       if (ble_device := self.get_ble_device_for_connect()) is None:
@@ -196,6 +205,11 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._async_connect(ble_device)
       except KettleError as err:
         _LOGGER.debug("Reconnect attempt %d to %s failed: %s", attempt, self.address, err)
+        continue
+      if await self.kettle.async_wait_for_state():
+        break
+      _LOGGER.debug("Reconnected to kettle %s but received no state; retrying", self.address)
+      await self.kettle.async_disconnect()
     self._cancel_unavailable_timer()
     if not self.last_update_success:
       self.async_set_updated_data(dict(self._state))

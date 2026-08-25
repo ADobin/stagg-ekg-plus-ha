@@ -39,22 +39,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: FellowStaggConfigEntry) 
     raise ConfigEntryError("Config entry has no Bluetooth address")
 
   _LOGGER.debug("Setting up Fellow Stagg integration for device: %s", address)
-  _remove_stale_entities(hass, address)
   coordinator = FellowStaggDataUpdateCoordinator(hass, entry, address)
 
   # Raises ConfigEntryNotReady (HA retries setup) if the kettle can't be reached
   await coordinator.async_config_entry_first_refresh()
   entry.runtime_data = coordinator
+  _remove_stale_entities(hass, entry)
 
   await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
   return True
 
 
-def _remove_stale_entities(hass: HomeAssistant, address: str) -> None:
-  """Remove registry entries for entities this version no longer provides."""
+def _remove_stale_entities(hass: HomeAssistant, entry: FellowStaggConfigEntry) -> None:
+  """Remove this entry's registry entries for entities this version no longer provides."""
   registry = er.async_get(hass)
   for platform, suffix in REMOVED_ENTITIES:
-    if entity_id := registry.async_get_entity_id(platform, DOMAIN, f"{address}_{suffix}"):
+    entity_id = registry.async_get_entity_id(platform, DOMAIN, f"{entry.unique_id}_{suffix}")
+    if entity_id and (entity := registry.async_get(entity_id)) and entity.config_entry_id == entry.entry_id:
       _LOGGER.debug("Removing stale entity %s", entity_id)
       registry.async_remove(entity_id)
 

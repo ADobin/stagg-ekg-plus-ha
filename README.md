@@ -65,20 +65,21 @@ your unit system.
 ### Temperature units
 
 The kettle reports whether it is set to °F or °C and the integration follows it:
-the target temperature range is 104–212 °F or 40–100 °C. Until the first poll that
-includes the unit, your Home Assistant unit system is assumed.
+the target temperature range is 104–212 °F or 40–100 °C.
 
 ### Connection and availability
 
 Home Assistant keeps a Bluetooth connection to the kettle open and the kettle
-streams its state about once a second, so entities update within a second of a
-change and commands are confirmed by the kettle's own report.
+streams its state about once a second, so entities reflect a change within a
+second of the kettle reporting it. A command returns once it has been sent; the
+resulting state shows up when the kettle reports it.
 
 If the connection drops, the last state is kept for 15 seconds while Home
-Assistant reconnects; after that the entities become `unavailable` until the
-connection is back. A kettle that stops responding is reconnected automatically.
-If the kettle cannot be reached when Home Assistant starts, setup is retried and
-completes as soon as the kettle advertises.
+Assistant reconnects; after that the entities become `unavailable` until a
+reconnected kettle has reported its full state again. A kettle that stops
+responding is reconnected automatically. If the kettle cannot be reached, or does
+not report its state, when Home Assistant starts, setup is retried and completes as
+soon as the kettle advertises.
 
 The kettle stops advertising a few minutes after it is last used but still accepts
 connections, and it only accepts one connection at a time: the Fellow app cannot
