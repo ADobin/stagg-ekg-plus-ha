@@ -8,24 +8,25 @@ from homeassistant.components.number import (
   NumberEntity,
   NumberMode,
 )
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import EntityCategory
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from . import FellowStaggDataUpdateCoordinator
-from .const import CONF_POLLING_INTERVAL, DEFAULT_POLLING_INTERVAL, DOMAIN, MAX_POLLING_INTERVAL, MIN_POLLING_INTERVAL
+from .const import CONF_POLLING_INTERVAL, DEFAULT_POLLING_INTERVAL, MAX_POLLING_INTERVAL, MIN_POLLING_INTERVAL
+from .coordinator import FellowStaggConfigEntry, FellowStaggDataUpdateCoordinator
 from .entity import FellowStaggEntity
 
 _LOGGER = logging.getLogger(__name__)
 
+PARALLEL_UPDATES = 1
+
 async def async_setup_entry(
   hass: HomeAssistant,
-  entry: ConfigEntry,
-  async_add_entities: AddEntitiesCallback,
+  entry: FellowStaggConfigEntry,
+  async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
   """Set up Fellow Stagg number based on a config entry."""
-  coordinator: FellowStaggDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
+  coordinator = entry.runtime_data
   async_add_entities([FellowStaggTargetTemperature(coordinator), FellowStaggPollingInterval(coordinator)])
 
 class FellowStaggTargetTemperature(FellowStaggEntity, NumberEntity):
@@ -75,7 +76,7 @@ class FellowStaggPollingInterval(FellowStaggEntity, NumberEntity):
   _attr_native_max_value = MAX_POLLING_INTERVAL
   _attr_native_unit_of_measurement = "s"
   _attr_icon = "mdi:timer-sync"
-  _attr_entity_category = EntityCategory.DIAGNOSTIC
+  _attr_entity_category = EntityCategory.CONFIG
   _attr_entity_registry_enabled_default = False
 
   def __init__(self, coordinator: FellowStaggDataUpdateCoordinator) -> None:
@@ -85,16 +86,12 @@ class FellowStaggPollingInterval(FellowStaggEntity, NumberEntity):
   @property
   def native_value(self) -> int:
     """Return the current polling interval."""
-    entry = self.hass.config_entries.async_get_entry(self.coordinator.entry_id)
-    if entry is None:
-      return DEFAULT_POLLING_INTERVAL
-    return int(entry.options.get(CONF_POLLING_INTERVAL, DEFAULT_POLLING_INTERVAL))
+    return int(self.coordinator.config_entry.options.get(CONF_POLLING_INTERVAL, DEFAULT_POLLING_INTERVAL))
 
   async def async_set_native_value(self, value: float) -> None:
     """Set a new polling interval."""
     seconds = int(value)
-    entry = self.hass.config_entries.async_get_entry(self.coordinator.entry_id)
-    if entry is not None:
-      self.hass.config_entries.async_update_entry(entry, options={**entry.options, CONF_POLLING_INTERVAL: seconds})
+    entry = self.coordinator.config_entry
+    self.hass.config_entries.async_update_entry(entry, options={**entry.options, CONF_POLLING_INTERVAL: seconds})
     self.coordinator.update_interval = timedelta(seconds=seconds)
     self.async_write_ha_state()

@@ -48,7 +48,7 @@ def _mock_bluetooth(mock_bluetooth: None):
 
 @pytest.fixture(autouse=True)
 def _no_settle_delay():
-    with patch("custom_components.fellow_stagg.COMMAND_SETTLE_DELAY", 0):
+    with patch("custom_components.fellow_stagg.coordinator.COMMAND_SETTLE_DELAY", 0):
         yield
 
 
@@ -65,14 +65,14 @@ def ble_lookup(ble_device: MagicMock):
     service_info = MagicMock(name="ServiceInfo", device=ble_device, source="hci0")
     with (
         patch(
-            "custom_components.fellow_stagg.async_ble_device_from_address",
+            "custom_components.fellow_stagg.coordinator.async_ble_device_from_address",
             return_value=ble_device,
         ) as lookup,
         patch(
-            "custom_components.fellow_stagg.async_last_service_info",
+            "custom_components.fellow_stagg.coordinator.async_last_service_info",
             return_value=service_info,
         ),
-        patch("custom_components.fellow_stagg.async_scanner_by_source", return_value=None),
+        patch("custom_components.fellow_stagg.coordinator.async_scanner_by_source", return_value=None),
     ):
         yield lookup
 
@@ -80,13 +80,12 @@ def ble_lookup(ble_device: MagicMock):
 @pytest.fixture
 def kettle(ble_lookup: MagicMock) -> MagicMock:
     """Mock KettleBLEClient I/O. kettle.async_poll.return_value is the polled state."""
+    client = "custom_components.fellow_stagg.coordinator.KettleBLEClient"
     with (
-        patch("custom_components.fellow_stagg.KettleBLEClient.async_poll", new_callable=AsyncMock) as poll,
-        patch("custom_components.fellow_stagg.KettleBLEClient.async_set_power", new_callable=AsyncMock) as power,
-        patch(
-            "custom_components.fellow_stagg.KettleBLEClient.async_set_temperature", new_callable=AsyncMock
-        ) as temperature,
-        patch("custom_components.fellow_stagg.KettleBLEClient.disconnect", new_callable=AsyncMock) as disconnect,
+        patch(f"{client}.async_poll", new_callable=AsyncMock) as poll,
+        patch(f"{client}.async_set_power", new_callable=AsyncMock) as power,
+        patch(f"{client}.async_set_temperature", new_callable=AsyncMock) as temperature,
+        patch(f"{client}.disconnect", new_callable=AsyncMock) as disconnect,
     ):
         poll.return_value = dict(FULL_STATE_F)
         mock = MagicMock()

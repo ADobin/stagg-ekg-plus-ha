@@ -15,7 +15,6 @@ from pytest_homeassistant_custom_component.common import async_fire_time_changed
 from custom_components.fellow_stagg.const import (
     CONF_TEMPERATURE_UNIT,
     DEFAULT_POLLING_INTERVAL,
-    DOMAIN,
     MAX_FAILED_POLLS,
     UNIT_CELSIUS,
     UNIT_FAHRENHEIT,
@@ -155,12 +154,11 @@ async def test_transient_failures_keep_state_then_unavailable(
 async def test_no_advertisement_counts_as_failure(
     hass: HomeAssistant, setup_entry, kettle: MagicMock, ble_lookup: MagicMock
 ) -> None:
-    await setup_entry()
+    entry = await setup_entry()
     ble_lookup.return_value = None
     kettle.async_poll.side_effect = KettleError("Kettle not reachable")
     # Drop the cached service info so no directed connect is possible either
-    coordinator = hass.data[DOMAIN][next(iter(hass.data[DOMAIN]))]
-    coordinator._last_service_info = None
+    entry.runtime_data._last_service_info = None
     for _ in range(MAX_FAILED_POLLS):
         await advance(hass)
     assert kettle.async_poll.await_args.args[0] is None
@@ -180,4 +178,3 @@ async def test_unload_disconnects(hass: HomeAssistant, setup_entry, kettle: Magi
     await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.NOT_LOADED
     kettle.disconnect.assert_awaited_once()
-    assert entry.entry_id not in hass.data.get(DOMAIN, {})

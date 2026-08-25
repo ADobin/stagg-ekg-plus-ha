@@ -2,7 +2,6 @@
 from collections.abc import Callable
 from typing import Any
 
-from homeassistant import config_entries
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -10,11 +9,12 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import UnitOfTime
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from . import FellowStaggDataUpdateCoordinator
-from .const import DOMAIN
+from .coordinator import FellowStaggConfigEntry, FellowStaggDataUpdateCoordinator
 from .entity import FellowStaggEntity
+
+PARALLEL_UPDATES = 0
 
 
 def _label(data: dict[str, Any], key: str, on: str, off: str) -> str | None:
@@ -76,11 +76,11 @@ SENSOR_DESCRIPTIONS: list[SensorEntityDescription] = [
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: config_entries.ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    entry: FellowStaggConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up the Fellow Stagg sensors."""
-    coordinator: FellowStaggDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
 
     async_add_entities(
         FellowStaggSensor(coordinator, description)

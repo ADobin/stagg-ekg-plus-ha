@@ -5,23 +5,23 @@ import logging
 from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from . import FellowStaggDataUpdateCoordinator
-from .const import DOMAIN
+from .coordinator import FellowStaggConfigEntry, FellowStaggDataUpdateCoordinator
 from .entity import FellowStaggEntity
 
 _LOGGER = logging.getLogger(__name__)
 
+PARALLEL_UPDATES = 1
+
 async def async_setup_entry(
   hass: HomeAssistant,
-  entry: ConfigEntry,
-  async_add_entities: AddEntitiesCallback,
+  entry: FellowStaggConfigEntry,
+  async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
   """Set up Fellow Stagg switch based on a config entry."""
-  coordinator: FellowStaggDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
+  coordinator = entry.runtime_data
   async_add_entities([FellowStaggPowerSwitch(coordinator)])
 
 class FellowStaggPowerSwitch(FellowStaggEntity, SwitchEntity):

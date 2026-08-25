@@ -5,7 +5,7 @@ from typing import Any
 
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from . import FellowStaggDataUpdateCoordinator
+from .coordinator import FellowStaggDataUpdateCoordinator
 
 
 class FellowStaggEntity(CoordinatorEntity[FellowStaggDataUpdateCoordinator]):
@@ -16,7 +16,7 @@ class FellowStaggEntity(CoordinatorEntity[FellowStaggDataUpdateCoordinator]):
   def __init__(self, coordinator: FellowStaggDataUpdateCoordinator, key: str) -> None:
     """Initialize with a unique_id of <address>_<key>."""
     super().__init__(coordinator)
-    self._attr_unique_id = f"{coordinator._address}_{key}"
+    self._attr_unique_id = f"{coordinator.address}_{key}"
     self._attr_device_info = coordinator.device_info
 
   @property
