@@ -1,0 +1,20 @@
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+norecursedirs = [".git", ".venv"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["custom_components", "tests"]
+force-sort-within-sections = true
+
+[tool.ruff.lint.per-file-ignores]
+# Not touched by the test/tooling setup; keep the upstream diff minimal.
+"custom_components/fellow_stagg/config_flow.py" = ["I001", "E501"]

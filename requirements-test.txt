@@ -1,0 +1,9 @@
+# Test-only dependencies. Pinned: each release pins one exact Home Assistant.
+#   uv venv --python 3.14 .venv && uv pip install --python .venv/bin/python -r requirements-test.txt
+#   0.13.357 -> homeassistant==2026.8.3 (Python >= 3.14)
+pytest-homeassistant-custom-component==0.13.357
+ruff>=0.12
+
+# Runtime deps of HA's bluetooth/usb components, needed to load the integration under test.
+aiousbwatcher==1.1.2
+serialx==1.8.2
