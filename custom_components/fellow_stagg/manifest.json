@@ -26,5 +26,5 @@
     "bleak",
     "bleak_retry_connector"
   ],
-  "version": "0.5"
+  "version": "0.6"
 }
