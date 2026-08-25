@@ -198,11 +198,6 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     )
 
 
-async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
-  """Set up the Fellow Stagg integration."""
-  return True
-
-
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
   """Set up Fellow Stagg integration from a config entry."""
   address = entry.unique_id
