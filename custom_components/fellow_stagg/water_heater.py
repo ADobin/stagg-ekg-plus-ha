@@ -88,7 +88,7 @@ class FellowStaggWaterHeater(FellowStaggEntity, WaterHeaterEntity):
     temperature = kwargs.get(ATTR_TEMPERATURE)
     if temperature is None:
       return
-    _LOGGER.debug("Setting water heater target temperature to %s°%s", temperature, self.coordinator.temperature_unit)
+    _LOGGER.debug("Setting water heater target temperature to %s %s", temperature, self.coordinator.temperature_unit)
     await self.coordinator.async_set_temperature(temperature)
 
   async def async_turn_on(self, **kwargs: Any) -> None:

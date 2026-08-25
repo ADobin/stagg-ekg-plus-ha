@@ -58,5 +58,5 @@ class FellowStaggTargetTemperature(FellowStaggEntity, NumberEntity):
 
   async def async_set_native_value(self, value: float) -> None:
     """Set new target temperature."""
-    _LOGGER.debug("Setting target temperature to %s°%s", value, self.coordinator.temperature_unit)
+    _LOGGER.debug("Setting target temperature to %s %s", value, self.coordinator.temperature_unit)
     await self.coordinator.async_set_temperature(value)
