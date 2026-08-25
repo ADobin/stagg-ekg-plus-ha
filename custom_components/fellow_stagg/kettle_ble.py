@@ -27,13 +27,27 @@ FRAME_MAGIC = b"\xef\xdd"
 # A poll is complete once these keys have been parsed; others are best-effort.
 REQUIRED_STATE_KEYS = frozenset({"power", "target_temp", "current_temp"})
 
+# State frame types (byte after the magic)
+FRAME_POWER = 0x00
+FRAME_HOLD_BUTTON = 0x01
+FRAME_TARGET_TEMP = 0x02
+FRAME_CURRENT_TEMP = 0x03
+FRAME_COUNTDOWN = 0x04
+FRAME_HOLD = 0x06
+FRAME_LIFTED = 0x08
+# Current temperature byte sent while the kettle is off or lifted (not a reading)
+CURRENT_TEMP_NO_READING = 0x20
+# 0x08 state frames are 3 bytes; the ~11-byte init echo shares the type and is ignored
+LIFTED_MAX_PAYLOAD = 3
+
 
 class KettleError(Exception):
     """Communication with the kettle failed."""
 
 
-def _is_header(frame: bytes) -> bool:
-    return len(frame) >= 3 and frame[:2] == FRAME_MAGIC
+def split_frames(data: bytes) -> list[tuple[int, bytes]]:
+    """Split magic-delimited data into (type, payload) frames."""
+    return [(chunk[0], bytes(chunk[1:])) for chunk in data.split(FRAME_MAGIC)[1:] if chunk]
 
 
 class KettleBLEClient:
@@ -46,7 +60,7 @@ class KettleBLEClient:
         self.init_sequence = INIT_SEQUENCE
         self._client: BleakClient | None = None
         self._sequence = 0  # Command sequence number
-        self._last_command_time = 0  # ms, for debouncing commands
+        self._last_command_time = 0.0  # monotonic seconds, for debouncing commands
         self._lock = asyncio.Lock()  # Serialize polls and commands on the single connection
 
     async def _ensure_connected(self, ble_device) -> BleakClient:
@@ -72,10 +86,10 @@ class KettleBLEClient:
 
     async def _ensure_debounce(self) -> None:
         """Keep at least 200ms between writes."""
-        current_time = int(time.time() * 1000)
-        if current_time - self._last_command_time < 200:
+        now = time.monotonic()
+        if now - self._last_command_time < 0.2:
             await asyncio.sleep(0.2)
-        self._last_command_time = current_time
+        self._last_command_time = now
 
     async def _authenticate(self) -> None:
         """Send the init sequence."""
@@ -177,45 +191,37 @@ class KettleBLEClient:
             await self._reset_connection()
 
     def parse_notifications(self, notifications: list[bytes]) -> dict[str, Any]:
-        """Parse notification frames into kettle state.
+        """Parse notification data into kettle state.
 
-        State arrives as header/payload notification pairs:
-          Header: bytes 0-1 magic (0xef, 0xdd), byte 2 message type
-          Payload: type-specific
-            - Type 0: Power (1 = on, 0 = off)
-            - Type 1: Hold (1 = hold, 0 = normal)
-            - Type 2: Target temperature (byte 0: temp, byte 1: unit, 1 = F, else C)
-            - Type 3: Current temperature (byte 0: temp, byte 1: unit, 1 = F, else C)
-            - Type 4: Countdown
-            - Type 8: Kettle position (0 = lifted, 1 = on base)
-        A header directly followed by another header has lost its payload and is skipped.
+        Frames are ``ef dd <type> <payload>``; header and payload may arrive as
+        separate or coalesced notifications, so the data is joined and split on
+        the magic. Types:
+          0x00 power [on]
+          0x01 hold button [on]           (slider position, pulses at setpoint)
+          0x02 target temperature [temp, unit]   unit 1 = F, else C
+          0x03 current temperature [temp, unit]  temp 0x20 = no reading
+          0x04 auto-off countdown [lo, hi]       seconds
+          0x06 hold engaged [on]
+          0x08 position [on_base, ...]           3 bytes; 0 = lifted
         """
         state: dict[str, Any] = {}
-        i = 0
-        while i < len(notifications) - 1:
-            header = notifications[i]
-            payload = notifications[i + 1]
-
-            if not _is_header(header) or _is_header(payload):
-                i += 1
+        for msg_type, payload in split_frames(b"".join(notifications)):
+            if not payload:
                 continue
-
-            msg_type = header[2]
-            if msg_type == 0 and len(payload) >= 1:
+            if msg_type == FRAME_POWER:
                 state["power"] = payload[0] == 1
-            elif msg_type == 1 and len(payload) >= 1:
-                state["hold"] = payload[0] == 1
-            elif msg_type == 2 and len(payload) >= 2:
+            elif msg_type == FRAME_HOLD_BUTTON:
+                state["hold_button"] = payload[0] == 1
+            elif msg_type == FRAME_TARGET_TEMP and len(payload) >= 2:
                 state["target_temp"] = payload[0]
                 state["units"] = "F" if payload[1] == 1 else "C"
-            elif msg_type == 3 and len(payload) >= 2:
-                state["current_temp"] = payload[0]
+            elif msg_type == FRAME_CURRENT_TEMP and len(payload) >= 2:
+                state["current_temp"] = None if payload[0] == CURRENT_TEMP_NO_READING else payload[0]
                 state["units"] = "F" if payload[1] == 1 else "C"
-            elif msg_type == 4 and len(payload) >= 1:
-                state["countdown"] = payload[0]
-            elif msg_type == 8 and len(payload) >= 1:
+            elif msg_type == FRAME_COUNTDOWN and len(payload) >= 2:
+                state["countdown"] = payload[0] | payload[1] << 8
+            elif msg_type == FRAME_HOLD:
+                state["hold"] = payload[0] == 1
+            elif msg_type == FRAME_LIFTED and len(payload) <= LIFTED_MAX_PAYLOAD:
                 state["lifted"] = payload[0] == 0
-
-            i += 2
-
         return state

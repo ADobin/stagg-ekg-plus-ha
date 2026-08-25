@@ -19,45 +19,74 @@ def client() -> KettleBLEClient:
 
 def test_parse_full_state_fahrenheit(client: KettleBLEClient) -> None:
     notifications = (
-        frame(0, [0]) + frame(1, [0]) + frame(2, [195, 1]) + frame(3, [150, 1]) + frame(4, [0]) + frame(8, [1])
+        frame(0, [0]) + frame(1, [0]) + frame(2, [195, 1]) + frame(3, [150, 1])
+        + frame(4, [0, 0]) + frame(6, [0]) + frame(8, [1, 1, 0])
     )
     assert client.parse_notifications(notifications) == {
         "power": False,
-        "hold": False,
+        "hold_button": False,
         "target_temp": 195,
         "units": "F",
         "current_temp": 150,
         "countdown": 0,
+        "hold": False,
         "lifted": False,
     }
 
 
 def test_parse_celsius_and_lifted(client: KettleBLEClient) -> None:
-    state = client.parse_notifications(frame(2, [91, 0]) + frame(8, [0]) + frame(0, [1]))
+    state = client.parse_notifications(frame(2, [91, 0]) + frame(8, [0, 1, 0]) + frame(0, [1]))
     assert state == {"target_temp": 91, "units": "C", "lifted": True, "power": True}
 
 
 def test_parse_partial_state_has_no_units(client: KettleBLEClient) -> None:
-    assert client.parse_notifications(frame(0, [1]) + frame(8, [1])) == {"power": True, "lifted": False}
+    assert client.parse_notifications(frame(0, [1]) + frame(8, [1, 1, 0])) == {"power": True, "lifted": False}
 
 
 def test_parse_empty(client: KettleBLEClient) -> None:
     assert client.parse_notifications([]) == {}
 
 
+def test_parse_coalesced_and_split_notifications(client: KettleBLEClient) -> None:
+    """Header+payload in one notification, and a payload split across two, parse the same."""
+    coalesced = [bytes([0xEF, 0xDD, 2, 195, 1, 0xEF, 0xDD, 0, 1])]
+    split = [bytes([0xEF, 0xDD, 2]), bytes([195]), bytes([1]), bytes([0xEF, 0xDD, 0]), bytes([1])]
+    expected = {"target_temp": 195, "units": "F", "power": True}
+    assert client.parse_notifications(coalesced) == expected
+    assert client.parse_notifications(split) == expected
+
+
 def test_parse_skips_leading_payload(client: KettleBLEClient) -> None:
-    """A stray payload before the first header must not shift the pairing."""
     assert client.parse_notifications([bytes([1])] + frame(2, [195, 1])) == {"target_temp": 195, "units": "F"}
 
 
-def test_parse_skips_header_without_payload(client: KettleBLEClient) -> None:
-    """A header followed directly by another header lost its payload."""
-    notifications = [bytes([0xEF, 0xDD, 2])] + frame(0, [1])
-    assert client.parse_notifications(notifications) == {"power": True}
+def test_parse_header_without_payload_is_ignored(client: KettleBLEClient) -> None:
+    assert client.parse_notifications([bytes([0xEF, 0xDD, 2])] + frame(0, [1])) == {"power": True}
 
 
-def test_parse_ignores_unknown_type_and_short_payload(client: KettleBLEClient) -> None:
-    assert client.parse_notifications(frame(7, [1]) + frame(2, [195]) + frame(0, [0])) == {"power": False}
+def test_parse_ignores_unknown_types_and_short_payloads(client: KettleBLEClient) -> None:
+    notifications = frame(5, [0xFF] * 4) + frame(7, [0, 0, 0]) + frame(2, [195]) + frame(4, [5]) + frame(0, [0])
+    assert client.parse_notifications(notifications) == {"power": False}
+
+
+def test_parse_countdown_is_16_bit_seconds(client: KettleBLEClient) -> None:
+    assert client.parse_notifications(frame(4, [0x10, 0x0E])) == {"countdown": 3600}
+    assert client.parse_notifications(frame(4, [0x2C, 0x01, 0x2C, 0x01])) == {"countdown": 300}
+
+
+def test_parse_hold_engaged_vs_hold_button(client: KettleBLEClient) -> None:
+    assert client.parse_notifications(frame(1, [1]) + frame(6, [0])) == {"hold_button": True, "hold": False}
+
+
+def test_parse_current_temp_no_reading_sentinel(client: KettleBLEClient) -> None:
+    assert client.parse_notifications(frame(3, [0x20, 1])) == {"current_temp": None, "units": "F"}
+    assert client.parse_notifications(frame(3, [0x20, 0])) == {"current_temp": None, "units": "C"}
+
+
+def test_parse_ignores_init_echo_on_position_type(client: KettleBLEClient) -> None:
+    echo = frame(8, list(range(11)))
+    assert client.parse_notifications(echo) == {}
+    assert client.parse_notifications(echo + frame(8, [0, 1, 0])) == {"lifted": True}
 
 
 @pytest.fixture
@@ -92,7 +121,7 @@ async def test_poll_authenticates_and_returns_state(client: KettleBLEClient, ble
 
 
 async def test_poll_returns_partial_state_after_timeout(client: KettleBLEClient, bleak: MagicMock) -> None:
-    bleak.frames = frame(0, [1]) + frame(8, [1])
+    bleak.frames = frame(0, [1]) + frame(8, [1, 1, 0])
     assert await client.async_poll(MagicMock()) == {"power": True, "lifted": False}
 
 
