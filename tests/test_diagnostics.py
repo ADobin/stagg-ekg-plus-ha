@@ -22,7 +22,7 @@ async def test_diagnostics_redacts_identifiers(
     entry = await setup_entry()
     result = await get_diagnostics_for_config_entry(hass, hass_client, entry)
     assert ADDRESS not in str(result)
-    assert result["coordinator"]["data"]["target_temp"] == 195
+    assert result["coordinator"]["data"]["target_temperature"] == 195
     assert result["entry"]["data"] == {"address": "**REDACTED**"}  # migrated from bluetooth_address
     coordinator = result["coordinator"]
     assert coordinator.pop("seconds_since_last_frame") < 5

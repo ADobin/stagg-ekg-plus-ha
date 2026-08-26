@@ -64,6 +64,9 @@
   "exceptions": {
     "command_failed": {
       "message": "Could not reach the kettle: {error}"
+    },
+    "temperature_out_of_range": {
+      "message": "Target temperature must be between {min} and {max} {unit}"
     }
   }
 }

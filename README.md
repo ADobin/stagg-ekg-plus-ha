@@ -113,6 +113,11 @@ If you experience connection issues:
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
+The Bluetooth protocol and connection handling live in the
+[`fellow-stagg-ble`](https://github.com/ADobin/fellow-stagg-ble) library on PyPI; this
+integration only contains the Home Assistant side. Protocol fixes go there first, then the
+pin in `manifest.json` and `requirements-test.txt` is bumped here.
+
 ### Development
 
 ```bash

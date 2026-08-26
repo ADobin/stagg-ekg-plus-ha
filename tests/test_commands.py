@@ -3,13 +3,13 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+from fellow_stagg_ble import FellowStaggCommandError, TemperatureUnit
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.util.unit_system import METRIC_SYSTEM
 import pytest
 
 from custom_components.fellow_stagg.const import UPDATE_INTERVAL
-from custom_components.fellow_stagg.kettle_ble import KettleError
 
 from .conftest import FULL_STATE_C, KettleHarness
 from .test_init import HEATER, POWER, TARGET, advance
@@ -35,15 +35,15 @@ async def test_switch_turn_off(hass: HomeAssistant, setup_entry, kettle: KettleH
 async def test_number_sets_fahrenheit(hass: HomeAssistant, setup_entry, kettle: KettleHarness) -> None:
     await setup_entry()
     await hass.services.async_call("number", "set_value", {"entity_id": TARGET, "value": 200}, blocking=True)
-    kettle.set_temperature.assert_awaited_once_with(200, fahrenheit=True)
+    kettle.set_temperature.assert_awaited_once_with(200, TemperatureUnit.FAHRENHEIT)
 
 
 async def test_number_sets_celsius(hass: HomeAssistant, setup_entry, kettle: KettleHarness) -> None:
     hass.config.units = METRIC_SYSTEM
-    kettle.initial_state = dict(FULL_STATE_C)
+    kettle.initial_state = FULL_STATE_C
     await setup_entry()
     await hass.services.async_call("number", "set_value", {"entity_id": TARGET, "value": 91}, blocking=True)
-    kettle.set_temperature.assert_awaited_once_with(91, fahrenheit=False)
+    kettle.set_temperature.assert_awaited_once_with(91, TemperatureUnit.CELSIUS)
 
 
 async def test_number_converts_from_ha_unit_system(hass: HomeAssistant, setup_entry, kettle: KettleHarness) -> None:
@@ -51,12 +51,12 @@ async def test_number_converts_from_ha_unit_system(hass: HomeAssistant, setup_en
     hass.config.units = METRIC_SYSTEM
     await setup_entry()
     await hass.services.async_call("number", "set_value", {"entity_id": TARGET, "value": 90}, blocking=True)
-    kettle.set_temperature.assert_awaited_once_with(194, fahrenheit=True)
+    kettle.set_temperature.assert_awaited_once_with(194, TemperatureUnit.FAHRENHEIT)
 
 
 async def test_number_rejects_out_of_range_for_unit(hass: HomeAssistant, setup_entry, kettle: KettleHarness) -> None:
     hass.config.units = METRIC_SYSTEM
-    kettle.initial_state = dict(FULL_STATE_C)
+    kettle.initial_state = FULL_STATE_C
     await setup_entry()
     with pytest.raises(Exception, match="outside valid range 40 - 100"):
         await hass.services.async_call("number", "set_value", {"entity_id": TARGET, "value": 195}, blocking=True)
@@ -68,7 +68,7 @@ async def test_water_heater_set_temperature_and_power(hass: HomeAssistant, setup
     await hass.services.async_call(
         "water_heater", "set_temperature", {"entity_id": HEATER, "temperature": 190}, blocking=True
     )
-    kettle.set_temperature.assert_awaited_once_with(190, fahrenheit=True)
+    kettle.set_temperature.assert_awaited_once_with(190, TemperatureUnit.FAHRENHEIT)
     await hass.services.async_call("water_heater", "turn_on", {"entity_id": HEATER}, blocking=True)
     kettle.set_power.assert_awaited_once_with(True)
 
@@ -87,7 +87,7 @@ async def test_water_heater_operation_mode(hass: HomeAssistant, setup_entry, ket
 
 async def test_command_failure_raises_translated_error(hass: HomeAssistant, setup_entry, kettle: KettleHarness) -> None:
     await setup_entry()
-    kettle.set_power.side_effect = KettleError("Connection closed")
+    kettle.set_power.side_effect = FellowStaggCommandError("Connection closed")
     with pytest.raises(HomeAssistantError, match="Could not reach the kettle: Connection closed"):
         await hass.services.async_call("switch", "turn_on", {"entity_id": POWER}, blocking=True)
     assert hass.states.get(POWER).state == "off"
@@ -121,11 +121,20 @@ async def test_write_failure_is_treated_as_connection_loss(
 ) -> None:
     """A failed write drops the link; the coordinator must reconnect (or go unavailable), not stay stale."""
     entry = await setup_entry()
-    kettle.set_power.side_effect = KettleError("Command failed: ATT error")
+    kettle.set_power.side_effect = FellowStaggCommandError("Command failed: ATT error")
     kettle.kettle.connected = False
-    kettle.kettle.on_disconnect()  # what KettleBLEClient now does after a failed write
+    kettle.kettle.disconnected_callback()  # the library reports the loss of a failed write
     with pytest.raises(HomeAssistantError):
         await hass.services.async_call("switch", "turn_on", {"entity_id": POWER}, blocking=True)
     await hass.async_block_till_done()
     assert entry.runtime_data.disconnects == 1
     assert kettle.kettle.connected  # reconnected immediately
+
+
+async def test_library_range_error_is_a_validation_error(
+    hass: HomeAssistant, setup_entry, kettle: KettleHarness
+) -> None:
+    await setup_entry()
+    kettle.set_temperature.side_effect = ValueError("outside 104-212 °F")
+    with pytest.raises(ServiceValidationError, match="between 104 and 212 °F"):
+        await hass.services.async_call("number", "set_value", {"entity_id": TARGET, "value": 200}, blocking=True)

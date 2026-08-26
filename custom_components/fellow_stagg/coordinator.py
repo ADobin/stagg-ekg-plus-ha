@@ -10,6 +10,16 @@ from typing import Any
 
 from bleak.backends.device import BLEDevice
 from bluetooth_data_tools import monotonic_time_coarse
+from fellow_stagg_ble import (
+  MAX_TEMP_C,
+  MAX_TEMP_F,
+  MIN_TEMP_C,
+  MIN_TEMP_F,
+  FellowStaggError,
+  FellowStaggKettle,
+  KettleState,
+  TemperatureUnit,
+)
 from homeassistant.components.bluetooth import (
   BluetoothCallbackMatcher,
   BluetoothChange,
@@ -23,49 +33,46 @@ from homeassistant.components.bluetooth import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP, UnitOfTemperature
 from homeassistant.core import Event, HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN, FRAME_TIMEOUT, UPDATE_INTERVAL
-from .kettle_ble import MAX_TEMP_C, MAX_TEMP_F, MIN_TEMP_C, MIN_TEMP_F, KettleBLEClient, KettleError
 
 _LOGGER = logging.getLogger(__name__)
-
-# Keys reported in the kettle's current unit; dropped when the unit changes
-TEMPERATURE_KEYS = ("target_temp", "current_temp")
 
 type FellowStaggConfigEntry = ConfigEntry[FellowStaggDataUpdateCoordinator]
 
 
-class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
+class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator[KettleState]):
   """Keeps a connection to the kettle and publishes its pushed state.
 
   Pushed state resets the refresh timer; a refresh therefore only runs after
   UPDATE_INTERVAL of silence and reconnects if the link is dead.
   """
 
-  def __init__(self, hass: HomeAssistant, entry: ConfigEntry, address: str) -> None:
+  def __init__(self, hass: HomeAssistant, entry: ConfigEntry, ble_device: BLEDevice) -> None:
     """Initialize the coordinator."""
     super().__init__(
       hass,
       _LOGGER,
       config_entry=entry,
-      name=f"Fellow Stagg {address}",
+      name=f"Fellow Stagg {ble_device.address}",
       update_interval=timedelta(seconds=UPDATE_INTERVAL),
     )
-    self.kettle = KettleBLEClient(address, on_update=self._on_update, on_disconnect=self._on_disconnect)
-    self.address = address
+    self.kettle = FellowStaggKettle(
+      ble_device, state_callback=self._on_state, disconnected_callback=self._on_disconnect
+    )
+    self.address = ble_device.address
     self.disconnects = 0
-    self._state: dict[str, Any] = {}
     self._last_service_info: BluetoothServiceInfoBleak | None = None  # for idle-kettle directed connect
     self._connect_lock = asyncio.Lock()
 
     self.device_info = DeviceInfo(
-      identifiers={(DOMAIN, address)},
-      connections={(dr.CONNECTION_BLUETOOTH, address)},
-      name=f"Fellow Stagg EKG+ {address}",
+      identifiers={(DOMAIN, self.address)},
+      connections={(dr.CONNECTION_BLUETOOTH, self.address)},
+      name=f"Fellow Stagg EKG+ {self.address}",
       manufacturer="Fellow",
       model="Stagg EKG+",
     )
@@ -73,10 +80,10 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
   @property
   def temperature_unit(self) -> str:
     """Unit reported by the kettle; Home Assistant's unit system until known."""
-    units = (self.data or {}).get("units")
-    if units == "F":
+    unit = self.data.unit if self.data is not None else None
+    if unit is TemperatureUnit.FAHRENHEIT:
       return UnitOfTemperature.FAHRENHEIT
-    if units == "C":
+    if unit is TemperatureUnit.CELSIUS:
       return UnitOfTemperature.CELSIUS
     return self.hass.config.units.temperature_unit
 
@@ -107,26 +114,24 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
       self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, self._async_on_hass_stop)
     )
 
-  async def _async_update_data(self) -> dict[str, Any]:
-    """Verify the link or (re)connect and wait for a full state."""
+  async def _async_update_data(self) -> KettleState:
+    """Verify the link or (re)connect; connect() returns once a full state has arrived."""
     if self.kettle.connected:
-      if time.monotonic() - self.kettle.last_frame_at < FRAME_TIMEOUT:
-        return dict(self._state)
+      last = self.kettle.last_frame_at
+      if last is not None and time.monotonic() - last < FRAME_TIMEOUT:
+        return self.kettle.state
       _LOGGER.debug("No frames from kettle %s for %ss; reconnecting", self.address, FRAME_TIMEOUT)
-      await self.kettle.async_disconnect()
+      await self.kettle.disconnect()
     try:
       await self._async_connect()
-    except KettleError as err:
+    except FellowStaggError as err:
       raise UpdateFailed(f"Cannot connect to kettle {self.address}: {err}") from err
-    if not await self.kettle.async_wait_for_state():
-      await self.kettle.async_disconnect()
-      raise UpdateFailed(f"Incomplete state from kettle {self.address}: {self.kettle.state}")
-    return dict(self._state)
+    return self.kettle.state
 
   async def async_shutdown(self) -> None:
     """Stop refreshing and drop the BLE connection."""
     await super().async_shutdown()
-    await self.kettle.async_disconnect()
+    await self.kettle.disconnect()
 
   async def _async_on_hass_stop(self, _event: Event) -> None:
     await self.async_shutdown()
@@ -138,21 +143,20 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async with self._connect_lock:
       if self.kettle.connected:
         return
-      await self.kettle.async_connect(self.get_ble_device_for_connect())
+      if (ble_device := self.get_ble_device_for_connect()) is None:
+        raise FellowStaggError("Kettle not reachable: no Bluetooth advertisement seen")
+      self.kettle.set_ble_device(ble_device)
+      await self.kettle.connect()
       if (fresh_info := async_last_service_info(self.hass, self.address, True)) is not None:
         self._last_service_info = fresh_info
 
   @callback
-  def _on_update(self, delta: dict[str, Any]) -> None:
-    """Merge pushed state changes and notify entities."""
-    if "units" in delta and delta["units"] != self._state.get("units"):
-      for key in TEMPERATURE_KEYS:
-        self._state.pop(key, None)
-    self._state.update(delta)
+  def _on_state(self, state: KettleState) -> None:
+    """Publish a pushed state change."""
     if self.data is None:
       return  # first refresh publishes the initial state
-    _LOGGER.debug("Kettle %s update: %s", self.address, delta)
-    self.async_set_updated_data(dict(self._state))
+    _LOGGER.debug("Kettle %s update: %s", self.address, state)
+    self.async_set_updated_data(state)
 
   @callback
   def _on_disconnect(self) -> None:
@@ -208,7 +212,7 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
       if not self.kettle.connected:
         await self._async_connect()
       await command(*args, **kwargs)
-    except KettleError as err:
+    except FellowStaggError as err:
       raise HomeAssistantError(
         translation_domain=DOMAIN,
         translation_key="command_failed",
@@ -217,12 +221,20 @@ class FellowStaggDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
   async def async_set_power(self, power_on: bool) -> None:
     """Turn the kettle on or off."""
-    await self._async_command(self.kettle.async_set_power, power_on)
+    await self._async_command(self.kettle.set_power, power_on)
 
   async def async_set_temperature(self, temperature: float) -> None:
     """Set the target temperature in the kettle's unit."""
-    await self._async_command(
-      self.kettle.async_set_temperature,
-      round(temperature),
-      fahrenheit=self.temperature_unit == UnitOfTemperature.FAHRENHEIT,
+    unit = (
+      TemperatureUnit.FAHRENHEIT
+      if self.temperature_unit == UnitOfTemperature.FAHRENHEIT
+      else TemperatureUnit.CELSIUS
     )
+    try:
+      await self._async_command(self.kettle.set_target_temperature, round(temperature), unit)
+    except ValueError as err:
+      raise ServiceValidationError(
+        translation_domain=DOMAIN,
+        translation_key="temperature_out_of_range",
+        translation_placeholders={"min": str(self.min_temp), "max": str(self.max_temp), "unit": self.temperature_unit},
+      ) from err

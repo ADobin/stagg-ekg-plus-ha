@@ -37,7 +37,7 @@ class FellowStaggPowerSwitch(FellowStaggEntity, SwitchEntity):
   @property
   def is_on(self) -> bool | None:
     """Return true if the switch is on."""
-    return self.data.get("power")
+    return self.state_data.power
 
   async def async_turn_on(self, **kwargs: Any) -> None:
     """Turn the switch on."""

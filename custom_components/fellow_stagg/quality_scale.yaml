@@ -10,9 +10,7 @@ rules:
   common-modules: done
   config-flow: done
   config-flow-test-coverage: done
-  dependency-transparency:
-    status: todo
-    comment: Protocol code is not yet a published library.
+  dependency-transparency: done
   docs-actions:
     status: exempt
     comment: No custom actions.
@@ -87,4 +85,6 @@ rules:
   inject-websession:
     status: exempt
     comment: Bluetooth only.
-  strict-typing: todo
+  strict-typing:
+    status: todo
+    comment: fellow-stagg-ble ships py.typed and passes mypy --strict; the integration is not yet type-checked.

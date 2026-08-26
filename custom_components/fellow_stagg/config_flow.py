@@ -16,8 +16,14 @@ from homeassistant.components.bluetooth import (
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_ADDRESS
 
+from fellow_stagg_ble import (
+    FellowStaggError,
+    FellowStaggKettle,
+    FellowStaggNotSupportedError,
+    is_fellow_stagg,
+)
+
 from .const import DOMAIN
-from .kettle_ble import LOCAL_NAME_PREFIX, SERVICE_UUID, KettleBLEClient, KettleError, KettleNotSupportedError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -26,7 +32,7 @@ MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 
 def is_kettle(info: BluetoothServiceInfoBleak) -> bool:
     """Whether an advertisement belongs to a Stagg EKG+."""
-    return SERVICE_UUID in info.service_uuids or info.name.startswith(LOCAL_NAME_PREFIX)
+    return is_fellow_stagg(info.name, info.service_uuids)
 
 
 def entry_title(name: str | None, address: str) -> str:
@@ -130,18 +136,16 @@ class FellowStaggConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def _async_probe(self, ble_device: BLEDevice) -> str | None:
         """Connect once and wait for the kettle's state; returns an error key or None."""
-        kettle = KettleBLEClient(ble_device.address)
+        kettle = FellowStaggKettle(ble_device)
         try:
-            await kettle.async_connect(ble_device)
-            if not await kettle.async_wait_for_state():
-                return "cannot_connect"
-        except KettleNotSupportedError:
+            await kettle.connect()
+        except FellowStaggNotSupportedError:
             return "not_supported"
-        except KettleError as err:
+        except FellowStaggError as err:
             _LOGGER.debug("Probe of %s failed: %s", ble_device.address, err)
             return "cannot_connect"
         finally:
-            await kettle.async_disconnect()
+            await kettle.disconnect()
         return None
 
     def _create_entry(self, name: str | None, address: str) -> ConfigFlowResult:

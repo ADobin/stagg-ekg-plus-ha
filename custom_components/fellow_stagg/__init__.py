@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import logging
 
+from homeassistant.components.bluetooth import async_ble_device_from_address
 from homeassistant.const import CONF_ADDRESS, Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryError
+from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers import entity_registry as er
 
 from .const import DOMAIN
@@ -39,7 +40,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: FellowStaggConfigEntry) 
     raise ConfigEntryError("Config entry has no Bluetooth address")
 
   _LOGGER.debug("Setting up Fellow Stagg integration for device: %s", address)
-  coordinator = FellowStaggDataUpdateCoordinator(hass, entry, address)
+  ble_device = async_ble_device_from_address(hass, address, connectable=True)
+  if ble_device is None:
+    # Discovery reloads the entry as soon as the kettle advertises
+    raise ConfigEntryNotReady(f"Kettle {address} has not been seen; lift it or press a button so it advertises")
+  coordinator = FellowStaggDataUpdateCoordinator(hass, entry, ble_device)
 
   # Raises ConfigEntryNotReady (HA retries setup) if the kettle can't be reached
   await coordinator.async_config_entry_first_refresh()

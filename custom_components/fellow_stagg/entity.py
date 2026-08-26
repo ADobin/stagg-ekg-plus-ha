@@ -1,8 +1,7 @@
 """Base entity for Fellow Stagg EKG+ kettle."""
 from __future__ import annotations
 
-from typing import Any
-
+from fellow_stagg_ble import KettleState
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .coordinator import FellowStaggDataUpdateCoordinator
@@ -25,6 +24,6 @@ class FellowStaggEntity(CoordinatorEntity[FellowStaggDataUpdateCoordinator]):
     return super().available and self.coordinator.kettle.connected
 
   @property
-  def data(self) -> dict[str, Any]:
-    """Last known kettle state, empty before the first successful poll."""
-    return self.coordinator.data or {}
+  def state_data(self) -> KettleState:
+    """Last known kettle state."""
+    return self.coordinator.data if self.coordinator.data is not None else KettleState()

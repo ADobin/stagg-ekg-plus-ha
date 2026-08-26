@@ -1,8 +1,10 @@
 """Binary sensor platform for Fellow Stagg EKG+ kettle."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
+from fellow_stagg_ble import KettleState
 from homeassistant.components.binary_sensor import BinarySensorEntity, BinarySensorEntityDescription
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
@@ -16,19 +18,23 @@ PARALLEL_UPDATES = 0
 
 @dataclass(frozen=True, kw_only=True)
 class FellowStaggBinarySensorEntityDescription(BinarySensorEntityDescription):
-  """Describes a kettle state key; invert for keys reported in the opposite sense."""
+  """Describes a boolean kettle state field."""
 
-  invert: bool = False
+  is_on_fn: Callable[[KettleState], bool | None]
 
 
+# Keys keep the unique_ids of earlier releases
 BINARY_SENSOR_DESCRIPTIONS: tuple[FellowStaggBinarySensorEntityDescription, ...] = (
-  FellowStaggBinarySensorEntityDescription(key="lifted", translation_key="on_base", invert=True),
-  FellowStaggBinarySensorEntityDescription(key="hold", translation_key="hold"),
+  FellowStaggBinarySensorEntityDescription(
+    key="on_base", translation_key="on_base", is_on_fn=lambda state: state.on_base
+  ),
+  FellowStaggBinarySensorEntityDescription(key="hold", translation_key="hold", is_on_fn=lambda state: state.hold),
   FellowStaggBinarySensorEntityDescription(
     key="hold_button",
     translation_key="hold_button",
     entity_category=EntityCategory.DIAGNOSTIC,
     entity_registry_enabled_default=False,
+    is_on_fn=lambda state: state.hold_button,
   ),
 )
 
@@ -54,13 +60,10 @@ class FellowStaggBinarySensor(FellowStaggEntity, BinarySensorEntity):
     self, coordinator: FellowStaggDataUpdateCoordinator, description: FellowStaggBinarySensorEntityDescription
   ) -> None:
     """Initialize the binary sensor."""
-    super().__init__(coordinator, description.translation_key or description.key)
+    super().__init__(coordinator, description.key)
     self.entity_description = description
 
   @property
   def is_on(self) -> bool | None:
     """Return the state, None until reported."""
-    value = self.data.get(self.entity_description.key)
-    if value is None:
-      return None
-    return not value if self.entity_description.invert else value
+    return self.entity_description.is_on_fn(self.state_data)

@@ -3,10 +3,17 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+import dataclasses
 import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from fellow_stagg_ble import (
+    SERVICE_UUID,
+    FellowStaggTimeoutError,
+    KettleState,
+    TemperatureUnit,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.util.unit_system import US_CUSTOMARY_SYSTEM
 import pytest
@@ -15,7 +22,6 @@ from pytest_homeassistant_custom_component.syrupy import HomeAssistantSnapshotEx
 from syrupy.assertion import SnapshotAssertion
 
 from custom_components.fellow_stagg.const import DOMAIN
-from custom_components.fellow_stagg.kettle_ble import REQUIRED_STATE_KEYS, SERVICE_UUID, KettleError
 
 ADDRESS = "AA:BB:CC:DD:EE:FF"
 
@@ -25,17 +31,19 @@ def frame(msg_type: int, payload: list[int]) -> list[bytes]:
     return [bytes([0xEF, 0xDD, msg_type]), bytes(payload)]
 
 
-FULL_STATE_F = {
-    "power": False,
-    "hold": False,
-    "hold_button": False,
-    "target_temp": 195,
-    "current_temp": 150,
-    "units": "F",
-    "countdown": 0,
-    "lifted": False,
-}
-FULL_STATE_C = {**FULL_STATE_F, "target_temp": 91, "current_temp": 65, "units": "C"}
+FULL_STATE_F = KettleState(
+    power=False,
+    hold=False,
+    hold_button=False,
+    target_temperature=195,
+    current_temperature=150,
+    unit=TemperatureUnit.FAHRENHEIT,
+    countdown=0,
+    on_base=True,
+)
+FULL_STATE_C = dataclasses.replace(
+    FULL_STATE_F, target_temperature=91, current_temperature=65, unit=TemperatureUnit.CELSIUS
+)
 
 
 @pytest.fixture
@@ -98,6 +106,10 @@ def ble_lookup(ble_device: MagicMock):
             return_value=ble_device,
         ) as lookup,
         patch(
+            "custom_components.fellow_stagg.async_ble_device_from_address",
+            new=lookup,
+        ),
+        patch(
             "custom_components.fellow_stagg.coordinator.async_last_service_info",
             return_value=service_info,
         ),
@@ -107,67 +119,73 @@ def ble_lookup(ble_device: MagicMock):
 
 
 class FakeKettle:
-    """Stands in for KettleBLEClient: connects instantly and lets tests push state or drop the link."""
+    """Stands in for FellowStaggKettle: connects instantly and lets tests push state or drop the link."""
 
-    def __init__(self, harness: KettleHarness, address: str, on_update, on_disconnect) -> None:
+    def __init__(self, harness: KettleHarness, ble_device, *, state_callback=None, disconnected_callback=None) -> None:
         self.harness = harness
-        self.address = address
-        self.on_update = on_update
-        self.on_disconnect = on_disconnect
-        self.state: dict[str, Any] = {}
-        self.received: set[str] = set()  # keys seen on the current connection
+        self.ble_device = ble_device
+        self.state_callback = state_callback
+        self.disconnected_callback = disconnected_callback
+        self.state = KettleState()
         self.connected = False
-        self.last_frame_at = 0.0
+        self.last_frame_at: float | None = None
         self.connect_calls: list[Any] = []
         self.disconnect_calls = 0
 
-    async def async_connect(self, ble_device) -> None:
-        self.connect_calls.append(ble_device)
-        if ble_device is None:
-            raise KettleError("Kettle not reachable: no Bluetooth advertisement seen")
+    @property
+    def address(self) -> str:
+        return self.ble_device.address
+
+    def set_ble_device(self, ble_device) -> None:
+        self.ble_device = ble_device
+
+    async def connect(self, *, state_timeout: float | None = 5.0) -> None:
+        self.connect_calls.append(self.ble_device)
         if self.harness.connect_error is not None:
             raise self.harness.connect_error
         self.connected = True
-        self.received.clear()
         self.last_frame_at = time.monotonic()
-        if self.harness.initial_state:
-            self.push(self.harness.initial_state)
+        if self.harness.initial_state is None or not self.harness.initial_state.complete:
+            # A connection that never delivers a full state is torn down by the library
+            if self.harness.initial_state is not None:
+                self.push(self.harness.initial_state)
+            await asyncio.sleep(0.01)
+            self.connected = False
+            raise FellowStaggTimeoutError("No complete state")
+        self.push(self.harness.initial_state)
 
-    async def async_wait_for_state(self, timeout: float = 0) -> bool:
-        if not REQUIRED_STATE_KEYS.issubset(self.received):
-            await asyncio.sleep(0.01)  # let a failing reconnect loop yield instead of spinning
-        return REQUIRED_STATE_KEYS.issubset(self.received)
-
-    async def async_disconnect(self) -> None:
+    async def disconnect(self) -> None:
         self.connected = False
         self.disconnect_calls += 1
 
-    async def async_set_power(self, power_on: bool) -> None:
-        await self.harness.set_power(power_on)
+    async def set_power(self, on: bool) -> None:
+        await self.harness.set_power(on)
 
-    async def async_set_temperature(self, temp: int, fahrenheit: bool = True) -> None:
-        await self.harness.set_temperature(temp, fahrenheit=fahrenheit)
+    async def set_target_temperature(self, value: int, unit: TemperatureUnit) -> None:
+        await self.harness.set_temperature(value, unit)
 
-    def push(self, delta: dict[str, Any]) -> None:
+    def push(self, changes: KettleState | dict[str, Any]) -> None:
         """Deliver a state change as the kettle would."""
-        self.state.update(delta)
-        self.received.update(delta)
+        if isinstance(changes, KettleState):
+            self.state = changes
+        else:
+            self.state = dataclasses.replace(self.state, **changes)
         self.last_frame_at = time.monotonic()
-        if self.on_update is not None:
-            self.on_update(dict(delta))
+        if self.state_callback is not None:
+            self.state_callback(self.state)
 
     def drop(self) -> None:
         """Lose the connection."""
         self.connected = False
-        if self.on_disconnect is not None:
-            self.on_disconnect()
+        if self.disconnected_callback is not None:
+            self.disconnected_callback()
 
 
 class KettleHarness:
     """Configuration shared by FakeKettle instances plus handles to drive them."""
 
     def __init__(self) -> None:
-        self.initial_state: dict[str, Any] | None = dict(FULL_STATE_F)
+        self.initial_state: KettleState | None = FULL_STATE_F
         self.connect_error: Exception | None = None
         self.instances: list[FakeKettle] = []
         self.set_power = AsyncMock()
@@ -188,8 +206,10 @@ class KettleHarness:
 def kettle(ble_lookup: MagicMock) -> KettleHarness:
     harness = KettleHarness()
 
-    def make(address, on_update=None, on_disconnect=None):
-        instance = FakeKettle(harness, address, on_update, on_disconnect)
+    def make(ble_device, *, state_callback=None, disconnected_callback=None):
+        instance = FakeKettle(
+            harness, ble_device, state_callback=state_callback, disconnected_callback=disconnected_callback
+        )
         harness.instances.append(instance)
         return instance
 
@@ -198,8 +218,8 @@ def kettle(ble_lookup: MagicMock) -> KettleHarness:
         return lambda: harness.advertisement_callbacks.remove(cb)
 
     with (
-        patch("custom_components.fellow_stagg.coordinator.KettleBLEClient", side_effect=make),
-        patch("custom_components.fellow_stagg.config_flow.KettleBLEClient", side_effect=make),
+        patch("custom_components.fellow_stagg.coordinator.FellowStaggKettle", side_effect=make),
+        patch("custom_components.fellow_stagg.config_flow.FellowStaggKettle", side_effect=make),
         patch("custom_components.fellow_stagg.coordinator.async_register_callback", side_effect=register_callback),
     ):
         yield harness

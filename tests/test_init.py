@@ -1,10 +1,12 @@
 """Coordinator behaviour: setup, pushed state, unit handling, connection loss and recovery."""
 from __future__ import annotations
 
+import dataclasses
 from datetime import timedelta
 import time
 from unittest.mock import MagicMock
 
+from fellow_stagg_ble import FellowStaggConnectionError, KettleState, TemperatureUnit
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP, UnitOfTemperature
 from homeassistant.core import HomeAssistant
@@ -15,7 +17,6 @@ import pytest
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
 from custom_components.fellow_stagg.const import DOMAIN, FRAME_TIMEOUT, UPDATE_INTERVAL
-from custom_components.fellow_stagg.kettle_ble import KettleError
 
 from .conftest import ADDRESS, FULL_STATE_C, FULL_STATE_F, KettleHarness
 
@@ -56,7 +57,7 @@ async def test_setup_fahrenheit(hass: HomeAssistant, setup_entry, kettle: Kettle
 
 async def test_setup_celsius(hass: HomeAssistant, setup_entry, kettle: KettleHarness) -> None:
     hass.config.units = METRIC_SYSTEM
-    kettle.initial_state = dict(FULL_STATE_C)
+    kettle.initial_state = FULL_STATE_C
     entry = await setup_entry()
     assert entry.runtime_data.temperature_unit == UnitOfTemperature.CELSIUS
     target = hass.states.get(TARGET)
@@ -69,7 +70,7 @@ async def test_pushed_state_updates_entities_immediately(
     hass: HomeAssistant, setup_entry, kettle: KettleHarness
 ) -> None:
     await setup_entry()
-    kettle.kettle.push({"power": True, "current_temp": 160})
+    kettle.kettle.push({"power": True, "current_temperature": 160})
     await hass.async_block_till_done()
     assert hass.states.get(POWER).state == "on"
     assert hass.states.get(HEATER).state == "electric"
@@ -77,33 +78,15 @@ async def test_pushed_state_updates_entities_immediately(
     assert hass.states.get(TARGET).state == "195"  # untouched keys are kept
 
 
-@pytest.mark.parametrize(
-    ("unit_system", "expected"),
-    [(None, UnitOfTemperature.FAHRENHEIT), (METRIC_SYSTEM, UnitOfTemperature.CELSIUS)],
-)
-async def test_missing_units_fall_back_to_ha_unit_system(
-    hass: HomeAssistant, setup_entry, kettle: KettleHarness, unit_system, expected
-) -> None:
-    if unit_system is not None:
-        hass.config.units = unit_system
-    # Required keys present but no unit (never seen live; temperature frames carry the unit)
-    kettle.initial_state = {"power": False, "target_temp": 195, "current_temp": None, "lifted": False}
-    entry = await setup_entry()
-    assert entry.runtime_data.temperature_unit == expected
-    assert hass.states.get(TARGET).state == "195"
-    assert hass.states.get(TARGET).attributes["unit_of_measurement"] == expected
-    assert hass.states.get(POWER).state == "off"
-
-
 async def test_metadata_updates_once_units_arrive(hass: HomeAssistant, setup_entry, kettle: KettleHarness) -> None:
     """A metric HA with a °F kettle: native values are °F, HA converts for display."""
     hass.config.units = METRIC_SYSTEM
-    kettle.initial_state = {"power": False, "target_temp": 91, "current_temp": 65}
+    kettle.initial_state = FULL_STATE_C
     entry = await setup_entry()
     assert entry.runtime_data.temperature_unit == UnitOfTemperature.CELSIUS
     assert hass.states.get(TARGET).attributes["max"] == 100
 
-    kettle.kettle.push({"target_temp": 195, "current_temp": 150, "units": "F"})
+    kettle.kettle.push({"target_temperature": 195, "current_temperature": 150, "unit": TemperatureUnit.FAHRENHEIT})
     await hass.async_block_till_done()
     assert entry.runtime_data.temperature_unit == UnitOfTemperature.FAHRENHEIT
     target = hass.states.get(TARGET)
@@ -114,8 +97,9 @@ async def test_metadata_updates_once_units_arrive(hass: HomeAssistant, setup_ent
 
 
 async def test_unit_change_drops_stale_temperatures(hass: HomeAssistant, setup_entry, kettle: KettleHarness) -> None:
+    """The library clears the target until it is re-read in the new unit; entities follow."""
     await setup_entry()
-    kettle.kettle.push({"current_temp": 65, "units": "C"})
+    kettle.kettle.push({"current_temperature": 65, "unit": TemperatureUnit.CELSIUS, "target_temperature": None})
     await hass.async_block_till_done()
     target = hass.states.get(TARGET)
     assert target.state == "unknown"
@@ -126,7 +110,7 @@ async def test_unit_change_drops_stale_temperatures(hass: HomeAssistant, setup_e
 async def test_current_temperature_unknown_without_reading(
     hass: HomeAssistant, setup_entry, kettle: KettleHarness
 ) -> None:
-    kettle.initial_state = {**FULL_STATE_F, "current_temp": None}
+    kettle.initial_state = dataclasses.replace(FULL_STATE_F, current_temperature=None)
     await setup_entry()
     assert hass.states.get(CURRENT).state == "unknown"
     assert hass.states.get(HEATER).attributes["current_temperature"] is None
@@ -136,7 +120,7 @@ async def test_connection_loss_marks_unavailable_and_reconnects_on_tick(
     hass: HomeAssistant, setup_entry, kettle: KettleHarness
 ) -> None:
     await setup_entry()
-    kettle.connect_error = KettleError("Connection closed")
+    kettle.connect_error = FellowStaggConnectionError("Connection closed")
     kettle.kettle.drop()
     await hass.async_block_till_done()
     assert hass.states.get(TARGET).state == "unavailable"
@@ -169,7 +153,7 @@ async def test_reconnect_without_state_stays_unavailable(
     assert hass.states.get(TARGET).state == "unavailable"
     assert not kettle.kettle.connected  # a silent connection is torn down
 
-    kettle.initial_state = dict(FULL_STATE_F)
+    kettle.initial_state = FULL_STATE_F
     await advance(hass, UPDATE_INTERVAL + 1)
     assert hass.states.get(TARGET).state == "195"
 
@@ -225,14 +209,25 @@ async def test_idle_kettle_is_not_reconnected_while_frames_flow(
 
 
 async def test_unreachable_at_setup_retries(hass: HomeAssistant, setup_entry, kettle: KettleHarness) -> None:
-    kettle.connect_error = KettleError("Connection closed")
+    kettle.connect_error = FellowStaggConnectionError("Connection closed")
     entry = await setup_entry()
     assert entry.state is ConfigEntryState.SETUP_RETRY
     assert hass.states.get(TARGET) is None
 
 
+async def test_never_seen_at_setup_retries(
+    hass: HomeAssistant, setup_entry, kettle: KettleHarness, ble_lookup: MagicMock
+) -> None:
+    """No advertisement known yet: retry until discovery reloads the entry."""
+    ble_lookup.return_value = None
+    entry = await setup_entry()
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert not kettle.instances
+
+
 @pytest.mark.parametrize(
-    "initial_state", [None, {"power": False, "lifted": False}, {"power": False, "target_temp": 195}]
+    "initial_state",
+    [None, KettleState(power=False, on_base=True), KettleState(power=False, target_temperature=195)],
 )
 async def test_incomplete_state_at_setup_retries(
     hass: HomeAssistant, setup_entry, kettle: KettleHarness, initial_state
@@ -277,7 +272,7 @@ async def test_stale_entities_from_older_versions_are_removed(
         entity_registry.async_get_or_create(platform, DOMAIN, unique_id, config_entry=entry)
     foreign = entity_registry.async_get_or_create("sensor", DOMAIN, "11:22:33:44:55:66_lifted")
 
-    kettle.connect_error = KettleError("unreachable")
+    kettle.connect_error = FellowStaggConnectionError("unreachable")
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.SETUP_RETRY

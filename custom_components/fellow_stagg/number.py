@@ -54,7 +54,7 @@ class FellowStaggTargetTemperature(FellowStaggEntity, NumberEntity):
   @property
   def native_value(self) -> float | None:
     """Return the current target temperature."""
-    return self.data.get("target_temp")
+    return self.state_data.target_temperature
 
   async def async_set_native_value(self, value: float) -> None:
     """Set new target temperature."""

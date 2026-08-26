@@ -1,6 +1,10 @@
 """Support for Fellow Stagg EKG+ kettle sensors."""
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
+
+from fellow_stagg_ble import KettleState
 from homeassistant.components.sensor import (
   SensorDeviceClass,
   SensorEntity,
@@ -16,19 +20,29 @@ from .entity import FellowStaggEntity
 
 PARALLEL_UPDATES = 0
 
-SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
-  SensorEntityDescription(
+@dataclass(frozen=True, kw_only=True)
+class FellowStaggSensorEntityDescription(SensorEntityDescription):
+  """Describes a numeric kettle state field."""
+
+  value_fn: Callable[[KettleState], int | None]
+
+
+# Keys keep the unique_ids of earlier releases
+SENSOR_DESCRIPTIONS: tuple[FellowStaggSensorEntityDescription, ...] = (
+  FellowStaggSensorEntityDescription(
     key="current_temp",
     translation_key="current_temperature",
     device_class=SensorDeviceClass.TEMPERATURE,
     state_class=SensorStateClass.MEASUREMENT,
     suggested_display_precision=0,
+    value_fn=lambda state: state.current_temperature,
   ),
-  SensorEntityDescription(
+  FellowStaggSensorEntityDescription(
     key="countdown",
     translation_key="countdown",
     device_class=SensorDeviceClass.DURATION,
     native_unit_of_measurement=UnitOfTime.SECONDS,
+    value_fn=lambda state: state.countdown,
   ),
 )
 
@@ -46,7 +60,11 @@ async def async_setup_entry(
 class FellowStaggSensor(FellowStaggEntity, SensorEntity):
   """Numeric kettle state."""
 
-  def __init__(self, coordinator: FellowStaggDataUpdateCoordinator, description: SensorEntityDescription) -> None:
+  entity_description: FellowStaggSensorEntityDescription
+
+  def __init__(
+    self, coordinator: FellowStaggDataUpdateCoordinator, description: FellowStaggSensorEntityDescription
+  ) -> None:
     """Initialize the sensor."""
     super().__init__(coordinator, description.key)
     self.entity_description = description
@@ -61,4 +79,4 @@ class FellowStaggSensor(FellowStaggEntity, SensorEntity):
   @property
   def native_value(self) -> int | None:
     """Return the state of the sensor."""
-    return self.data.get(self.entity_description.key)
+    return self.entity_description.value_fn(self.state_data)

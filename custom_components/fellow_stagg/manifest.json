@@ -23,8 +23,10 @@
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/levi/stagg-ekg-plus-ha/issues",
   "loggers": [
-    "bleak",
-    "bleak_retry_connector"
+    "fellow_stagg_ble"
+  ],
+  "requirements": [
+    "fellow-stagg-ble==0.1.0"
   ],
   "version": "0.7"
 }

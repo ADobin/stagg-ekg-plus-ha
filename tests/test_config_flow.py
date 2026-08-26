@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+from fellow_stagg_ble import FellowStaggConnectionError, FellowStaggNotSupportedError
 from homeassistant.config_entries import SOURCE_BLUETOOTH, SOURCE_USER, ConfigEntryState
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
@@ -11,7 +12,6 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.fellow_stagg.const import DOMAIN
-from custom_components.fellow_stagg.kettle_ble import KettleError, KettleNotSupportedError
 
 from .conftest import ADDRESS, service_info
 
@@ -88,7 +88,7 @@ async def test_bluetooth_confirm_probe_failure_then_success(hass: HomeAssistant,
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": SOURCE_BLUETOOTH}, data=service_info()
     )
-    kettle.connect_error = KettleError("busy")
+    kettle.connect_error = FellowStaggConnectionError("busy")
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "cannot_connect"}
@@ -101,7 +101,7 @@ async def test_bluetooth_confirm_probe_failure_then_success(hass: HomeAssistant,
 
 
 async def test_probe_of_unsupported_device_aborts(hass: HomeAssistant, kettle) -> None:
-    kettle.connect_error = KettleNotSupportedError("no characteristic")
+    kettle.connect_error = FellowStaggNotSupportedError("no characteristic")
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_ADDRESS: ADDRESS})
     assert result["type"] is FlowResultType.ABORT and result["reason"] == "not_supported"
@@ -137,7 +137,7 @@ async def test_discovery_of_configured_kettle_aborts(hass: HomeAssistant, setup_
 
 async def test_discovery_reloads_entry_waiting_for_kettle(hass: HomeAssistant, setup_entry, kettle) -> None:
     """An advertisement from a kettle whose entry is retrying setup triggers an immediate reload."""
-    kettle.connect_error = KettleError("not reachable")
+    kettle.connect_error = FellowStaggConnectionError("not reachable")
     entry = await setup_entry()
     assert entry.state is ConfigEntryState.SETUP_RETRY
 

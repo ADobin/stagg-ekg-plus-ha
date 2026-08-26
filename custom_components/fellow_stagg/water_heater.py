@@ -64,17 +64,17 @@ class FellowStaggWaterHeater(FellowStaggEntity, WaterHeaterEntity):
   @property
   def current_temperature(self) -> float | None:
     """Return the current temperature."""
-    return self.data.get("current_temp")
+    return self.state_data.current_temperature
 
   @property
   def target_temperature(self) -> float | None:
     """Return the target temperature."""
-    return self.data.get("target_temp")
+    return self.state_data.target_temperature
 
   @property
   def current_operation(self) -> str | None:
     """Return current operation."""
-    power = self.data.get("power")
+    power = self.state_data.power
     if power is None:
       return None
     return STATE_ELECTRIC if power else STATE_OFF
