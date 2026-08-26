@@ -12,21 +12,21 @@
     }
   ],
   "codeowners": [
-    "@levi"
+    "@ADobin"
   ],
   "config_flow": true,
   "dependencies": [
     "bluetooth_adapters"
   ],
-  "documentation": "https://github.com/levi/stagg-ekg-plus-ha",
+  "documentation": "https://github.com/ADobin/stagg-ekg-plus-ha",
   "integration_type": "device",
   "iot_class": "local_push",
-  "issue_tracker": "https://github.com/levi/stagg-ekg-plus-ha/issues",
+  "issue_tracker": "https://github.com/ADobin/stagg-ekg-plus-ha/issues",
   "loggers": [
     "fellow_stagg_ble"
   ],
   "requirements": [
     "fellow-stagg-ble==0.1.1"
   ],
-  "version": "0.9"
+  "version": "0.9.1"
 }

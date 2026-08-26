@@ -18,11 +18,11 @@ A Home Assistant integration for the Fellow Stagg EKG+ electric kettle. Control 
 2. Add this repository as a custom repository in HACS:
    - Click the menu icon in the top right of HACS
    - Select "Custom repositories"
-   - Add `levi/stagg-ekg-plus-ha` with category "Integration"
-3. Click "Download" on the Stagg EKG+ integration
+   - Add `ADobin/stagg-ekg-plus-ha` with category "Integration"
+3. Click "Download" on the Fellow Stagg EKG+ integration
 4. Restart Home Assistant
 5. Go to Settings -> Devices & Services -> Add Integration
-6. Search for "Stagg EKG+"
+6. Search for "Fellow Stagg EKG+"
 7. Follow the configuration steps
 
 ### Option 2: Manual Installation
@@ -30,7 +30,7 @@ A Home Assistant integration for the Fellow Stagg EKG+ electric kettle. Control 
 1. Copy the `custom_components/fellow_stagg` directory to your Home Assistant's `custom_components` directory
 2. Restart Home Assistant
 3. Go to Settings -> Devices & Services -> Add Integration
-4. Search for "Stagg EKG+"
+4. Search for "Fellow Stagg EKG+"
 5. Follow the configuration steps
 
 ## Configuration
@@ -132,4 +132,6 @@ brings the matching Home Assistant release with it.
 
 ## License
 
-MIT License - see LICENSE file for details
+MIT License - see LICENSE file for details. This project started as a fork of
+[levi/stagg-ekg-plus-ha](https://github.com/levi/stagg-ekg-plus-ha); the original
+copyright notice is retained in LICENSE.
