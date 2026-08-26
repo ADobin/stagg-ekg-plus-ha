@@ -26,7 +26,7 @@
     "fellow_stagg_ble"
   ],
   "requirements": [
-    "fellow-stagg-ble==0.1.0"
+    "fellow-stagg-ble==0.1.1"
   ],
-  "version": "0.8"
+  "version": "0.9"
 }
