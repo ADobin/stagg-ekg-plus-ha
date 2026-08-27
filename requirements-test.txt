@@ -4,7 +4,7 @@
 pytest-homeassistant-custom-component==0.13.357
 
 # The integration's own requirement (kept in sync with manifest.json)
-fellow-stagg-ble==0.1.1
+fellow-stagg-ble==0.1.2
 ruff>=0.12
 
 # Runtime deps of HA's bluetooth/usb components, needed to load the integration under test.
